@@ -247,6 +247,23 @@ while the original agent remains in its original turn and can continue.
 - **When the session is already long/messy/has a failure history, prefer opening a new one**: the cost of context expansion and misleading content exceeds the cost of reconstructing context;
 - If deciding to reuse → must use fork+compact; when uncertain, open a new one—better to lose cache than cleanliness.
 
+### Shared Card Attachment vs Long-Term Memory
+
+Both reuse prior work, but they are different mechanisms with different boundaries, and **neither substitutes for the other**:
+
+- **Long-term memory** (`graph_memory_add` and friends): persistent facts/experience that any agent may recall
+  on its own; it lives in the memory area, is read on demand, and is not part of goal assembly;
+- **Context cards**: part of goal assembly—explicitly attached (`graph_attach_shared_card`), auditable
+  (the `card.shared_referenced` event), and detachable (`graph_detach_shared_card`); when an attempt starts they are
+  injected into the subagent context in `context_cards` order. Use `graph_list_shared_cards` to list the shared pool
+  read-only (`id/title/status/refs`) and pick the cards to reuse;
+- **Which one to use**: a long-lived fact that everyone should know → memory; previously collected material
+  that becomes input to a new or parallel goal → attach the shared card. **Do not** copy a full card into memory for convenience.
+
+**Authorization boundary**: attaching/detaching follows the same owner/supervisor model as unbinding—the goal creator, `human:*` (owner GUI),
+and `supervisor:<sessionId>` matching `project.yaml` `supervisor.session` are allowed; execution subagents
+(`agent:<child>`) are always rejected with zero side effects. **No implicit automatic inheritance is introduced**: reuse must be an explicit tool call.
+
 ## Execution Rules
 
 - **Self-report status (immediately at the start of every round + update at key stages)**: the supervisor itself must also use

@@ -135,6 +135,7 @@ import {
   settingsPostSchema,
   unbindPostSchema,
   unbindGoalChild,
+  authorizeSharedCardLink,
   abandonAttemptPostSchema,
   abandonAttempt,
   getCachedBoardPayload,
@@ -1137,6 +1138,8 @@ export function apply(ctx, config) {
     if (sid && readSupervisorSession(root) === sid) return `supervisor:${sid}`;
     return actorOf(ex);
   };
+  // g-369：owner 判定的唯一输入——目标创建者（meta.created_by）。只读；目标不存在时由 findGoalFile 抛错。
+  const goalCreatedBy = (root, goalId) => loadGoal(findGoalFile(root, goalId)).meta.created_by;
   // g-190：子代理活跃度探测（live registry 权威）。
   // 返回 "running"（正运行）/ "idle"（已加载未运行）/ "gone"（不在 live registry）/ "unknown"（registry 不可用）。
   const childLiveState = (childId) => {
@@ -1621,6 +1624,56 @@ export function apply(ctx, config) {
         parameters: params({ goal: str, card: str }, ["goal", "card"]),
       },
       run: (a, ex) => { convertSharedToOwned(rootFor(ex), a.goal, a.card, { actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
+      // g-369：把共享池中既有共享卡挂载到另一个目标（复用已收集的上下文，与「创建时即成共享」互补）。
+      // 授权复用 authorizeSharedCardLink（与解绑同口径的 owner/主管模型），先鉴权后调用 ops ⇒ 拒绝零副作用；
+      // 事件 actor 用 unbindActorOf 映射（主管会话 → supervisor:<sid>）。ops.addSharedCardRef 原生幂等。
+      def: {
+        name: "graph_attach_shared_card",
+        description: sT("tool.graph_attach_shared_card"),
+        parameters: params({ goal: str, card: str }, ["goal", "card"]),
+      },
+      run: (a, ex) => {
+        const root = rootFor(ex);
+        const actor = unbindActorOf(ex, root);
+        authorizeSharedCardLink(root, actor, goalCreatedBy(root, a.goal));
+        addSharedCardRef(root, a.goal, a.card, actor);
+        return { ok: true, card: a.card, refCount: referenceCount(root, a.card) };
+      },
+    },
+    {
+      // g-369：解除目标对共享卡的引用（卡本体保留在共享池，零引用也不删除）。
+      def: {
+        name: "graph_detach_shared_card",
+        description: sT("tool.graph_detach_shared_card"),
+        parameters: params({ goal: str, card: str }, ["goal", "card"]),
+      },
+      run: (a, ex) => {
+        const root = rootFor(ex);
+        const actor = unbindActorOf(ex, root);
+        authorizeSharedCardLink(root, actor, goalCreatedBy(root, a.goal));
+        removeSharedCardRef(root, a.goal, a.card, actor);
+        return { ok: true, card: a.card, refCount: referenceCount(root, a.card) };
+      },
+    },
+    {
+      // g-369：只读列出共享池（供主管组装新目标/并行目标时挑选可复用的共享卡）。
+      // 只投影 id/title/status/refs——sharedCards() 每项含 content（全文正文）、attachments 与
+      // cardFile（绝对路径），裸返会灌 token 并泄露绝对路径。不鉴权（只读）。
+      def: {
+        name: "graph_list_shared_cards",
+        description: sT("tool.graph_list_shared_cards"),
+        parameters: params({}, []),
+      },
+      run: (a, ex) => ({
+        cards: sharedCards(rootFor(ex)).map((c) => ({
+          id: c.id,
+          title: c.title,
+          status: c.status,
+          refs: (c.referencingGoals ?? []).map((g) => g.id),
+        })),
+      }),
     },
     {
       // g-150：主管登记 attempt handoff（返工约束、前序失败、推荐基线、验收命令）。
