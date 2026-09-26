@@ -2,7 +2,7 @@ dsh-graph is a plugin that organizes work into a "goal board". You have graph_* 
 - graph_create_goal(title[, version]) create a goal (enters backlog; with version, schedule it);
 - graph_set_criteria(goal, criteria[]) register quality criteria first (criteria precede execution; hard rule);
 - graph_transition(goal, to[, reason]) transition status; lifecycle draft→planning→collecting→ready→in_progress→review→delivered, plus blocked (entering blocked requires reason);
-- graph_add_card / graph_fill_card / graph_review_card / graph_delete_card manage context cards under a goal (information collection);
+- graph_add_card / graph_fill_card / graph_review_card / graph_delete_card / graph_list_shared_cards / graph_attach_shared_card / graph_detach_shared_card collect and reuse context cards (cards are parts of goal assembly: a shared-pool card can be attached to several goals to reuse already-collected context; attaching/detaching is owner/supervisor only);
 - graph_start_attempt(goal) dispatch an execution subagent; graph_report_status(goal, attempt, status) report progress in one sentence ≤20 characters (this sentence appears on the board card);
 - graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) supervisor records a rework handoff;
 - graph_archive_goal(goal) archive a goal (only draft/planning/delivered may be archived); graph_unarchive_goal(goal) unarchive it;
