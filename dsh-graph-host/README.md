@@ -108,6 +108,9 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 | | `graph_delete_card` | 删除未在收集中的卡片 |
 | | `graph_convert_card_to_shared` | 将自有卡转换为共享卡（放入共享池） |
 | | `graph_convert_card_to_owned` | 将共享卡收回为自有卡（独占） |
+| | `graph_attach_shared_card` | 把共享池既有共享卡挂载到目标（复用已收集上下文，仅 owner/主管） |
+| | `graph_detach_shared_card` | 解除目标对共享卡的引用（卡仍留池；collecting 拒绝） |
+| | `graph_list_shared_cards` | 只读列出共享池共享卡（id/title/status/refs） |
 | **附件管理** | `graph_store_attachment` | 存储文件附件到目标 |
 | | `graph_delete_attachment` | 删除目标附件 |
 | **排期管理** | `graph_move_goal` | 在 Backlog、独立目标与版本之间移动排期 |
@@ -127,7 +130,7 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 | **协作与交接** | `graph_add_comment` | 向目标追加可追溯的讨论与反馈历史 |
 | | `graph_handoff` | 生成跨会话交接文档 `HANDOFF.md` |
 | | `graph_claim_supervisor` | 新会话接管 Supervisor 并更新会话元数据 |
-| | `graph_help` | 输出插件功能说明与 44 个工具速查清单 |
+| | `graph_help` | 输出插件功能说明与 47 个工具速查清单 |
 | **数据与校验** | `graph_validate` | 执行全量不变式检查（状态、依赖环、卡片引用） |
 | | `graph_rebuild` | 从事件流完全重建目标状态并与元数据对账 |
 
@@ -275,6 +278,9 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools:
 | | `graph_delete_card` | Delete cards not currently collecting |
 | | `graph_convert_card_to_shared` | Convert owned card to shared card |
 | | `graph_convert_card_to_owned` | Convert shared card back to owned card |
+| | `graph_attach_shared_card` | Attach an existing shared card to a goal (reuse collected context; owner/supervisor only) |
+| | `graph_detach_shared_card` | Remove a goal's reference to a shared card (card stays in the pool; rejected while collecting) |
+| | `graph_list_shared_cards` | List shared pool cards read-only (id/title/status/refs) |
 | **Attachments** | `graph_store_attachment` | Store file attachments to a goal |
 | | `graph_delete_attachment` | Delete a goal attachment |
 | **Scheduling** | `graph_move_goal` | Move goals between Backlog, Standalone, and Versions |
@@ -294,7 +300,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools:
 | **Collaboration** | `graph_add_comment` | Append historical discussion or human feedback |
 | | `graph_handoff` | Export cross-session handover document (`HANDOFF.md`) |
 | | `graph_claim_supervisor` | Claim supervisor role in new session & update metadata |
-| | `graph_help` | Display usage instructions and 44-tool checklist |
+| | `graph_help` | Display usage instructions and 47-tool checklist |
 | **Validation** | `graph_validate` | Validate full invariants (states, cycles, card refs) |
 | | `graph_rebuild` | Rebuild goal state from `events.jsonl` and reconcile |
 | | `graph_handoff` | Export cross-session handover document (`HANDOFF.md`) |

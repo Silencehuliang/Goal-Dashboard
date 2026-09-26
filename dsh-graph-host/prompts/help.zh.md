@@ -1,4 +1,4 @@
-dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具（共 44 个）：
+dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具（共 47 个）：
 
 ## 目标生命周期
 - graph_create_goal(title[, version][, type]) 建目标（进 backlog，带 version 则排期；type 可选 feature/bug/task/improvement/patch/chore）；
@@ -26,6 +26,9 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_delete_card(goal, card) 删除卡片（collecting 状态不可删）；
 - graph_convert_card_to_shared(goal, card) 自有卡 → 共享卡；
 - graph_convert_card_to_owned(goal, card) 共享卡 → 自有卡（引用计数须为 1）；
+- graph_attach_shared_card(goal, card) 把共享池既有共享卡挂载到目标（复用已收集上下文，引用计数 +1，幂等；仅 owner/主管）；
+- graph_detach_shared_card(goal, card) 解除目标对共享卡的引用（卡仍留池；collecting 拒绝；仅 owner/主管）；
+- graph_list_shared_cards() 只读列出共享池（id/title/status/refs，不含正文）；
 - graph_store_attachment(name[, content][, base64]) 存储附件（text 用 content，二进制用 base64）；
 - graph_delete_attachment(name) 删除附件（仍被引用则拒绝）；
 - graph_bind_collect_card(goal, card, child_id[, parent_session_id][, provider][, model]) 绑定收集子代理到卡片。
@@ -60,7 +63,7 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_update_settings(patch) 更新项目配置（schema 校验、保留注释、原子写）。
 
 ## 帮助
-- graph_help() 显示本帮助（全部 44 个工具清单与参数速查）。
+- graph_help() 显示本帮助（全部 47 个工具清单与参数速查）。
 
 ## 接管 supervisor
 **仅在负责人明确要求你接管 supervisor 时执行**——默认任何会话都不得自动 claim：

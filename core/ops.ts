@@ -2324,7 +2324,7 @@ export function resolveCard(
     // 共享面板/列表直接用 sharedCards() 读权威池，不经过此守卫。
     if (!goalReferencesCard(root, goalIdSafe, cardIdSafe)) {
       throw new GraphError(
-        `共享卡 ${cardIdSafe} 未被目标 ${goalIdSafe} 引用，无法访问——请先挂载（addSharedCardRef）`,
+        `共享卡 ${cardIdSafe} 未被目标 ${goalIdSafe} 引用，无法访问——请先用 graph_attach_shared_card 挂载（或经共享管理面板）`,
       );
     }
     return { file: sharedFile, doc: loadGoal(sharedFile), scope: "shared" };
@@ -5090,6 +5090,24 @@ export function authorizeUnbind(root: string, actor: string, createdBy: unknown,
     throw new GraphError("主管身份 " + a + " 不匹配已配置的 supervisor.session——无权执行解绑");
   }
   throw new GraphError("身份 " + a + " 无权解绑——仅限目标 owner（创建者/human）或已配置的主管");
+}
+
+/** g-369：共享卡挂载/解除引用的授权——与 authorizeUnbind 同一 owner/主管模型。
+ *  复用 authorizeUnbind 作为唯一判定真源（childId 传 ""：挂载/解除引用没有「子代理自我解绑」语义），
+ *  仅把拒绝文案改写为共享卡域措辞，避免把 agent 引向「解绑」这一无关动作。
+ *  放行：① 目标创建者（meta.created_by，含 agent:<id> 形式）；② human:*（负责人 GUI 口径）；
+ *  ③ supervisor:<sessionId> 且匹配 project.yaml 的 supervisor.session。
+ *  其余（尤其执行子代理 agent:<child> / 裸 child_id）一律拒绝抛 GraphError。
+ *  调用方必须在产生任何副作用之前调用本函数（拒绝即零副作用）。 */
+export function authorizeSharedCardLink(root: string, actor: string, createdBy: unknown): void {
+  try {
+    authorizeUnbind(root, actor, createdBy, "");
+  } catch {
+    const a = String(actor ?? "").trim();
+    throw new GraphError(
+      `身份 ${a || "(空)"} 无权挂载或解除共享卡引用——仅限目标 owner（创建者/human）或已配置的主管`,
+    );
+  }
 }
 
 export interface UnbindGoalChildOptions {
