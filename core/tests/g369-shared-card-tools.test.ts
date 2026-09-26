@@ -237,6 +237,17 @@ test("g-369 判据5：core 授权函数逐条规则（human 分支的测法：�
       `${JSON.stringify(actor)} 必须被拒`,
     );
   }
+  // 诊断保真（复核要求）：supervisor:<错误 session> 被拒时文案必须带**底层原因**，
+  // 不得压成通用「无权」——主管会话换号是老问题，丢失该诊断会让人白跑。
+  assert.throws(
+    () => authorizeSharedCardLink(root, "supervisor:nope", "agent:other"),
+    (e: unknown) => {
+      assert.ok(e instanceof Error);
+      assert.match(e.message, AUTH_REJECT);
+      assert.match(e.message, /supervisor\.session/, "拒绝文案必须保留底层原因（supervisor.session 不匹配）");
+      return true;
+    },
+  );
 });
 
 // ===== 判据 6：list =====
