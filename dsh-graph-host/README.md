@@ -58,7 +58,6 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 - 声明宿主兼容范围 `engines.dsh`，供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。
 - 侧边栏窄档搜索改为单列「搜索结果」聚合泳道，窄档保持纵向单列、零横向溢出。
-- macOS / Linux 门禁合并为一份跨平台执行件 `scripts/platform-smoke-test.mjs`。
 
 完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [v0.16.1 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.1.md)，平台门禁运行手册见 [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -218,7 +217,6 @@ All three platforms share the same package. **Known limitation**: on macOS a wor
 
 - Declared host compatibility range (`engines.dsh`), read by host-aware markets such as dsh-market for card display and install/update pre-flight.
 - Narrow-sidebar search now uses a single-column "Search results" aggregate lane, keeping the narrow tier a single vertical column with zero horizontal overflow.
-- macOS / Linux gates merged into one cross-platform executor (`scripts/platform-smoke-test.mjs`).
 
 See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history; per-release gate verdicts live in the [v0.16.1 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.1.md) and the platform gate runbook in [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md). Official releases are distributed via npm and the dsh-market ecosystem.
 

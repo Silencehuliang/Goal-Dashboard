@@ -21,7 +21,6 @@
 
 - 声明宿主兼容范围 `engines.dsh`，供 dsh-market 等宿主感知型市场在卡片展示与安装预检中读取。
 - 侧边栏窄档搜索改为单列「搜索结果」聚合泳道，窄档保持纵向单列、零横向溢出。
-- macOS / Linux 门禁合并为一份跨平台执行件 `scripts/platform-smoke-test.mjs`。
 
 变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [docs/release-checklist-v0.16.1.md](docs/release-checklist-v0.16.1.md)，平台门禁运行手册见 [docs/platform-gate.md](docs/platform-gate.md)。
 
