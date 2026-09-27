@@ -2,6 +2,19 @@
 
 [中文](#中文) | [English](#english)
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/miuzel/dsh-graph/main/docs/banner.webp" alt="dsh-graph —— Agent 工作的目标化管理" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/dsh-graph"><img src="https://img.shields.io/npm/v/dsh-graph?style=flat-square&label=npm&color=cb3837" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-graph"><img src="https://img.shields.io/npm/dm/dsh-graph?style=flat-square&label=downloads&color=cb3837" alt="npm downloads"></a>
+  <a href="https://raw.githubusercontent.com/miuzel/dsh-graph/main/dsh-graph-host/package.json"><img src="https://img.shields.io/node/v/dsh-graph?style=flat-square" alt="node engine"></a>
+  <a href="https://awesome-dsh-plugin.com"><img src="https://img.shields.io/badge/awesome--dsh--plugin-listed-2f6feb?style=flat-square" alt="awesome-dsh-plugin listed"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license MIT"></a>
+  <a href="https://raw.githubusercontent.com/miuzel/dsh-graph/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.1.8--0-2f6feb?style=flat-square" alt="DSH host range"></a>
+</p>
+
 ---
 
 ## 中文
@@ -11,8 +24,9 @@
 **dsh-graph** 是面向 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的目标看板插件。它将大模型智能体（Agent）的工作流组织为基于图的目标管理（Graph-based Goal Management）。
 
 本插件采用**一体化单包分发**（npm 包名 `dsh-graph`），同时集成两大核心能力：
-- **Host 端**：向 DSH Agent 提供覆盖目标全生命周期的 `graph_*` 工具集，并暴露 `/api/dsh-graph*` REST API（支持看板投影、目标详情查询与写操作）；
-- **Client 端**：无缝内嵌于 DSH Web 控制台（`conversation.view` 槽位）的浏览器二维泳道看板（`lib/client.js`），提供直观的可视化交互与实时追踪。
+
+- **Host 端**：向 DSH Agent 提供覆盖目标全生命周期的 47 个 `graph_*` 工具，并暴露 `/api/dsh-graph*` REST API（支持看板投影、目标详情查询与写操作）；
+- **Client 端**：无缝内嵌于 DSH Web 控制台（`conversation.view` 槽位）的浏览器二维泳道看板，提供直观的可视化交互与实时追踪。
 
 数据以本地纯文本与事件流形式存储于工作区的 `.dsh-graph/` 目录，Git 友好、天然支持协同对账与审计追踪。
 
@@ -26,40 +40,26 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-> **环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。
->
-> **当前版本**：`v0.16.1`（与 `package.json` 的 `version`、看板 `PLUGIN_VERSION` 三处一致；发布门禁红线 2）。
->
-> **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
->
-> **宿主兼容声明**：`engines.dsh` 声明 DSH 兼容范围 `>=0.1.5-rc.2 <0.1.8-0`（与 `@deepseek-ai/dsh-settings` peer `^0.1.5-rc.2` 取交集后自洽；上界 `-0` 表示排除 `0.1.8` 的**一切预发布与正式版**——下代宿主须重新验证后再放宽），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取（市场读到的是 registry 上**已发布**版本的清单且有缓存 ⇒ 本声明自**包含它的版本发布后**才生效）；市场的判定是 `engines.dsh` 与各 peer 范围的**合取**，且发现阶段**不读** `peerDependenciesMeta.optional`。
->
-> ### 🚀 v0.16.1 新功能
->
-> - **声明宿主兼容范围 `engines.dsh`**：包清单新增 `"dsh": ">=0.1.5-rc.2 <0.1.8-0"`（上界 `-0` 表示排除 `0.1.8` 的**一切预发布与正式版**），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取；该声明自**包含它的版本发布后**才在市场上生效（市场读的是 registry 上已发布版本的清单且有缓存），判定口径为 `engines.dsh` 与各 peer 范围的**合取**。
-> - **侧边栏窄档搜索改为单列「搜索结果」聚合泳道**：窄档（<480px）下激活搜索时，看板不再退出单泳道收窄、退回横向多泳道「全宽」网格；命中卡（含跨分区命中）聚合进单列「搜索结果」泳道，既保住 g-233「搜索命中不得被视图过滤藏掉」，又保持窄档纵向单列、零横向溢出。宽档（≥480px）搜索行为与视觉**零变化**（不新增状态真源、不新增持久化键）。
-> - **macOS / Linux 门禁合并为一份跨平台执行件**：`scripts/platform-smoke-test.mjs` 成为**唯一一份** macOS/Linux 门禁实现——转发既有 `win-smoke-test.mjs` 的 T1–T5（在原生 macOS/Linux 上取得**平台效力**：T3–T5 真跑）+ 六项平台无关探针 P1–P6 + 平台无关审计 M4；旧路径 `scripts/macos-smoke-test.mjs` 降为一行转发 shim、原实现归档在 `scripts/archived/`，命令序列、逐项判读与回填表见 `docs/platform-gate.md`。（v0.16.0 小节原写「`v0.17.0` 起」，本版按实际归入校正为 `v0.16.1`。）
->
-> **⚠️ Windows / macOS 原生门禁：本版未执行，不得视为 PASS**：`v0.16.1` **未**在原生 Windows/macOS 上执行门禁——**负责人裁定省略**，理由为**本版无跨平台敏感内容**（`g-365` = 元数据与文档、`g-366` = 纯客户端渲染逻辑、`g-362` = 门禁执行件重构，均未触碰文件锁与平台判定路径）；Linux/WSL2 侧已实跑全绿。最近一次真机结论出自 **v0.16.0 周期**：Windows 原生 `win32/x64` PASS 通过 10/失败 0/告警 0，macOS `darwin/arm64` 专检 通过 2/失败 0/告警 3（转发 T1–T5 = 10/0/0）——出处 `docs/release-checklist-v0.16.0.md` §3 / §3.4。本版 Linux 门禁逐项结论见 `docs/release-checklist-v0.16.1.md`。
->
-> ### 🚀 v0.16.0 新功能
->
-> - **适配 DeepSeek Harness `0.1.7` 宿主 settings 服务换代**：旧 `settings.register(namespace, schema)` API 已移除（实测告警 `sctx.settings.register is not a function`）。插件改为**能力探测分流**——服务提供 `register` 走旧 namespace 注册，否则回落 `describe` 表单投影（profile 条目 `Config`）；两条路径均在隔离实例上双宿主实机验证，且**零版本号比较**。
-> - **适配 `0.1.7` 子代理目录换代（两层）**：容器由 `subagentsByParent` 改为 `projectionsBySession[sid].values.subagentCatalog`，**entry 形状同时去掉 `kind`**（新形状 `{id, createdAt, mode, label?}`，新增 `mode:'unknown'`）。目录谓词改为形状探测（有 `kind` 走旧判定、无 `kind` 按 `id`），避免点「↗ 转到对话」**静默**打开父会话。
-> - （以下为此前版本的累积亮点）**适配 `0.1.6` 宿主 API 变更**：会话导航/focus 职责从 `sessions` 服务迁移到 `uiWorkspace`，统一走 `openSessionTarget`；子代理聚焦、点击「转到对话」、「交给产品经理」与用户反馈派发链路在新宿主下全部恢复可用。
-> - **看板实时会话区在 `0.1.6` 下恢复显示**：按新宿主的 retain 生命周期先保留（retain）会话引用再借取 binding，不再出现「⚠️ 会话未接入（不在会话列表）」与「模型目录不可用」，真实 tokens / ctx / 模型可正常渲染；`0.1.5` 无 retain 时自动回退被动 binding，双向兼容。
-> - **批量接受的主管通知在 `0.1.6` 下恢复**：通知派发改为能力探测分流，单卡接受与批量接受同形路径一并修复。
-> - **并发槽位耗尽给出可操作提示**：`0.1.6` 引入子代理激活上限（默认 8 个活跃 continuable 子代理），容量耗尽或冷恢复被拒时不再只透出英文错误码。
-> - **看板刷新按钮重置自动刷新倒计时**：点击刷新后倒计时立即回到完整周期，不再沿旧终点继续递减。
-> - **「定义/润色」复制模板改写为自述式主管指令**：标题标明由主管处理，明确接收者角色、下一步动作与本次边界（仅处理定义/润色，不执行代码、不推进状态或版本）。
->
-> **DSH 版本兼容性**：**声明的宿主兼容范围**（自 v0.16.1 起，`engines.dsh`）：`>=0.1.5-rc.2 <0.1.8-0`；**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`（`0.1.7-rc.2` 于 2026-09-25 用 v0.16.0 发布物 tarball 复验：T1–T5 全绿 **10/0/0**；逐包比对确认子代理目录层零代码变化、`llm` 服务三个方法签名逐字未变）。**本周期（g-351）实测的双宿主对照**：`0.1.7-rc.1` 上验证宿主 settings 服务换代后的**能力探测分流**——新 API 存在则走「profile 条目 Config → 设置表单」，实测 `sctx.settings.register is not a function` 降级告警消失、profile 全局默认（如 `subagentMode`）经 profile patch 真正生效（`mode_source=global`），`graph_*` 工具计数仍为 44、`/api/dsh-graph*` 端点注册齐全；`0.1.6-alpha.2` 上重跑旧路径，确认 namespace 注册（`$DSH_HOME/settings.yaml`）与 profile 全局默认照常生效，**零退化**。更早的 `0.1.2-alpha.x` ~ `0.1.4` 系列按工具与提示词契约向后兼容，但**未在本周期复跑**，且**自 v0.16.1 起不在声明范围内**（市场安装预检会保守挡住）。
->
-> **平台范围**：**Linux（WSL2）、原生 Windows、macOS**（三平台使用同一安装包；**macOS 最近一次真机复验为 `v0.11.0`**，自 `v0.11.0` 以来 `core/platform.ts` 与文件锁相关代码零改动）。**本版本 `v0.16.0` 已在 Linux（WSL2）上实测**；**Windows 真机门禁（T1–T5）由负责人在本次发布前于原生 Windows 执行，结论见 `docs/release-checklist-v0.16.0.md` §3**——**本次不预先声明 PASS**；若发布时未执行该门禁，则以「**Windows 未验证**」如实标注（发布门禁红线 1）。真机门禁执行件为仓库内 `scripts/win-smoke-test.mjs`（`node win-smoke-test.mjs --tarball dsh-graph-0.16.0.tgz`）。
->
-> **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
->
-> 已发布版本支持通过 npm 与 dsh-market 生态分发。
+**当前版本**：v0.16.1（= npm 上已发布的最新版）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+
+**宿主兼容范围**：`engines.dsh` 声明 `>=0.1.5-rc.2 <0.1.8-0`（上界 `-0` 排除 `0.1.8` 的一切预发布与正式版），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`。
+
+**平台状态**：
+
+| 平台 | 本版状态 |
+|------|----------|
+| Linux / WSL2 | ✅ 已实测通过 |
+| 原生 Windows | ⚠️ **未验证**（最近真机结论见 [v0.16.0 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md)） |
+| macOS | ⚠️ **未验证**（最近真机结论见 [v0.16.0 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md)） |
+
+三平台使用同一安装包。**已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
+
+**最新亮点（v0.16.1）**
+
+- 声明宿主兼容范围 `engines.dsh`，供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。
+- 侧边栏窄档搜索改为单列「搜索结果」聚合泳道，窄档保持纵向单列、零横向溢出。
+
+完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [v0.16.1 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.1.md)，平台门禁运行手册见 [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
 
 ---
 
@@ -82,7 +82,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 ### Agent 工具速查表
 
-dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类：
+dsh-graph 为 Agent 提供了完善的工具链（共 47 个 `graph_*` 工具），按功能划分为以下分类：
 
 | 分类 | 工具名称 | 核心说明 |
 |------|----------|----------|
@@ -139,6 +139,7 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 ### 浏览器看板说明
 
 内嵌于 DSH Web 界面：
+
 - **二维泳道布局**：清晰展现多个版本的推进节奏，支持灵活查看不同泳道和阶段；
 - **实时流式更新**：卡片与顶部状态栏直观反映 Agent 汇报的最新执行状态；外部文件变更触发动画闪烁；
 - **丰富弹窗与抽屉交互**：点击卡片可展开目标详情弹窗，查看质量判据、上下文卡片与 Attempt 历史。
@@ -156,17 +157,18 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 - **窄档行为**（分档依据是**看板根容器实测宽度**——即看板组件自身元素的 `clientWidth`，**不是窗口宽度、也不是浏览器视口宽度**）：
   - **`≥ 480px`（宽档）**：多泳道横向并排，各版本 / Backlog / 独立目标可同时查看；
   - **`< 480px`（单泳道档）**：阶段列由横向并排改为**纵向堆叠**，泳道内容由版本选择器决定（**具体版本 / Backlog / 独立目标三选一**；**工作区一个版本都没有时，默认落点就是「独立目标」**，选择器当前项显示「独立目标」）；该档**没有版本折叠开关**（收起来等于空板），并同时**把工具条强制折叠为「⋯ 工具」**、**隐藏 DEBUG 行**。
-  - **怎么把看板放进 `< 480px`**：宿主页签的宽度由**页签布局模式**决定，不是拖出来的——实测（1600px 视口）单页签 **719px**、页签上的 `分栏` 之后每页签 **359px**（该档随窗口宽度变化）、`全屏` **799px**。所以**默认单页签宽度（719px）落在宽档**，此时不会出现单泳道；需要单泳道档时用页签上的 **`分栏`**，或把窗口收窄到看板面板实测宽度 <480px。
+  - **怎么把看板放进 `< 480px`**：宿主页签的宽度由**页签布局模式**决定，不是拖出来的——实测（1600px 视口）单页签 **719px**、页签上的 `分栏` 之后每页签 **359px**（该档随窗口宽度变化）、`全屏` **799px**。所以**默认单页签宽度（719px）落在宽档**，此时不会出现单泳道；需要单泳道档时用页签上的 **`分栏`**，或把窗口收窄到看板面板实测宽度 <480px。进入后一眼可验：六个阶段块**纵向堆叠**，且泳道标题右侧出现版本选择器（当前项为具体版本 / Backlog / 独立目标）。
   - **宽档残留（实测）**：宽档网格的最小宽度实测约 **956px**，所以看板面板实测宽度在这之下时（例如默认单页签 **719px**），宽档网格**仍会横向滚动**、把「确认 / 批量接受」列推到可视区外；真正消除横向滚动的是单泳道档（<480px）。
-  - **版本选择器只在单泳道档渲染**：宽档下整个看板**没有**版本选择器（该元素不渲染）。因此宽档里能看到的「全部版本」只可能来自**打开的下拉选项列表**，而不是当前选中项。
+  - **版本选择器只在单泳道档渲染**：宽档下整个看板**没有**版本选择器（该元素不渲染）。因此宽档里能看到的「全部版本」只可能来自**打开的下拉选项列表**，而不是当前选中项；单泳道档未显式选择任何视图时，当前项是「独立目标」而**不是**「全部版本」。
 
-效果截图见仓库 [`screenshot/sidebar-kanban.png`](https://github.com/miuzel/dsh-graph/blob/main/screenshot/sidebar-kanban.png)（虚构演示数据 nebula-notes，右侧栏宽度落在 `< 480px` 单泳道档）；本 npm 包不包含仓库的 `screenshot/` 目录，故此处只给出仓库路径。
+效果截图见仓库 [screenshot/sidebar-kanban.png](https://github.com/miuzel/dsh-graph/blob/main/screenshot/sidebar-kanban.png)（虚构演示数据 nebula-notes，右侧栏宽度落在 `< 480px` 单泳道档）；本 npm 包不包含仓库的 `screenshot/` 目录，故此处只给出仓库路径。
 
 ---
 
 ### 数据存储说明
 
 插件数据保存在当前工作区下的 `.dsh-graph/` 目录：
+
 - **自动初始化**：首次在工作区运行工具时自动生成数据骨架，不包含多余 Demo 数据；
 - **Git 友好**：所有数据由纯文本 YAML/Markdown 与只追加（append-only）的 `events.jsonl` 组成；
 - **事件流对账**：`events.jsonl` 记录每一次状态流转与操作，是唯一事实来源，可通过 `graph_rebuild` 随时对账；
@@ -181,8 +183,9 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 **dsh-graph** is a goal-oriented kanban plugin for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness), bringing Graph-based Goal Management into Agent workflows.
 
 Distributed as a **single unified package** (npm package name: `dsh-graph`), it provides both halves out-of-the-box:
-- **Host Side**: Exposes a full suite of `graph_*` tools to DSH Agents covering the entire goal lifecycle, along with `/api/dsh-graph*` REST endpoints for board projections, goal details, and mutations;
-- **Client Side**: A browser 2D swimlane kanban board (`lib/client.js`) integrated into DSH Web (`conversation.view` slot) for intuitive visualization and real-time tracking.
+
+- **Host Side**: Exposes 47 `graph_*` tools to DSH Agents covering the entire goal lifecycle, along with `/api/dsh-graph*` REST endpoints for board projections, goal details, and mutations;
+- **Client Side**: A browser 2D swimlane kanban board integrated into DSH Web (the `conversation.view` slot) for intuitive visualization and real-time tracking.
 
 All data is stored locally as human-readable files and an append-only event log under `.dsh-graph/`, making it Git-friendly, easily auditable, and collaborative.
 
@@ -196,40 +199,26 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-> **Requirements**: Node.js ≥ 22 (includes precompiled core runtime).
->
-> **Current version**: `v0.16.1` (consistent across `package.json` `version`, the board's `PLUGIN_VERSION`, and this README; release-gate red line 2).
->
-> **Dependency Note**: Core packages provided by the DSH host (`@deepseek-ai/cordis` ^4.0.2, `@deepseek-ai/schemastery` ^3.18.2, `@deepseek-ai/dsh-settings` ^0.1.5-rc.2) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention), provided directly by the host runtime without peer dependency warnings during installation; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
->
-> **Host compatibility declaration**: `engines.dsh` declares the DSH range `>=0.1.5-rc.2 <0.1.8-0` (self-consistent with the `@deepseek-ai/dsh-settings` peer `^0.1.5-rc.2`; the `-0` upper bound excludes **every** `0.1.8` prerelease and final release — the next host generation must be re-verified before the range is re-opened). Host-aware markets such as dsh-market read it for card display and install/update pre-flight (**markets read the manifest of the *published* version, with caching — so this declaration takes effect once the version carrying it is published**); the market's verdict is a **conjunction** of `engines.dsh` and each peer range, and discovery does **not** honor `peerDependenciesMeta.optional`.
->
-> ### 🚀 What's new in v0.16.1
->
-> - **Declared host compatibility range (`engines.dsh`)**: the package manifest now carries `"dsh": ">=0.1.5-rc.2 <0.1.8-0"` (the `-0` upper bound excludes **every** `0.1.8` prerelease and final release), read by host-aware markets such as dsh-market for card display and install/update pre-flight; the declaration takes effect on the market only **once the version carrying it is published** (markets read the registry manifest of the published version, with caching), and the verdict is a **conjunction** of `engines.dsh` and each peer range.
-> - **Narrow-sidebar search now uses a single-column "Search results" aggregate lane**: in the narrow tier (<480px) an active search no longer drops out of the single-lane narrowing back into the horizontally scrolling full-width multi-lane grid; matching cards (including matches from other partitions) are aggregated into one "Search results" lane, which preserves the g-233 rule that **search hits must never be hidden by view filtering** while keeping the narrow tier a single vertical column with zero horizontal overflow. Wide tier (≥480px) search behavior and visuals are **unchanged** (no new state source, no new persisted key).
-> - **macOS / Linux gates merged into one cross-platform executor**: `scripts/platform-smoke-test.mjs` is now the **single** macOS/Linux gate implementation — it forwards the existing `win-smoke-test.mjs` T1–T5 (which gain **platform authority** on native macOS/Linux: T3–T5 really run) and adds six platform-agnostic probes P1–P6 plus the platform-agnostic audit M4; the old `scripts/macos-smoke-test.mjs` is reduced to a one-line forwarding shim with its implementation archived under `scripts/archived/`. Command sequence, per-item verdicts, and the back-fill table live in `docs/platform-gate.md`. (The v0.16.0 section originally said "from v0.17.0"; it is corrected here to `v0.16.1` to match the actual release vehicle.)
->
-> **⚠️ Native Windows / macOS gate: not executed for this release — must not be read as PASS**: `v0.16.1` was **not** gated on native Windows/macOS — **the owner waived it**, on the grounds that **this release has no cross-platform-sensitive content** (`g-365` = metadata and docs, `g-366` = pure client-side rendering logic, `g-362` = gate-executor refactor; none of them touches the file-locking or platform-detection paths), and the Linux/WSL2 side was run in full. The most recent on-device verdicts come from the **v0.16.0 cycle**: native Windows `win32/x64` PASS 10 passed / 0 failed / 0 warnings, macOS `darwin/arm64` 2 passed / 0 failed / 3 warnings (forwarded T1–T5 = 10/0/0) — see `docs/release-checklist-v0.16.0.md` §3 / §3.4. Per-item Linux gate verdicts for this release are in `docs/release-checklist-v0.16.1.md`.
->
-> ### 🚀 What's new in v0.16.0
->
-> - **Adapted to the DeepSeek Harness `0.1.7` settings-service generation change**: the old `settings.register(namespace, schema)` API is gone (observed warning: `sctx.settings.register is not a function`). The plugin now **probes capabilities**: if the service exposes `register` it uses the legacy namespace registration, otherwise it falls back to the `describe` form projection (profile entry `Config`); both paths were verified on a live, isolated instance against both hosts, with **zero version-literal comparison**.
-> - **Adapted to the `0.1.7` subagent-catalog generation change (both layers)**: the container moved from `subagentsByParent` to `projectionsBySession[sid].values.subagentCatalog`, and the **entry shape lost `kind`** (now `{id, createdAt, mode, label?}`, with a new `mode:'unknown'`). Catalog predicates now probe the shape (entries that carry `kind` use the old rule, entries without it match by `id`), so "↗ go to conversation" can no longer **silently** open the parent session.
-> - (Cumulative highlights from earlier releases) **Adapted to DeepSeek Harness `0.1.6` host API changes**: session navigation/focus moved from the `sessions` service to `uiWorkspace`, now unified through `openSessionTarget`; subagent focus, "go to conversation", and the "hand off to PM" / user-feedback delivery paths are all functional again on the new host.
-> - **Live session strip restored under `0.1.6`**: session references are now retained through the new host's retain lifecycle before borrowing a binding, so "⚠️ session not attached (not in session list)" and "model catalog unavailable" no longer appear and real tokens / ctx / model render correctly; on `0.1.5`, which has no retain, it automatically falls back to passive binding — compatibility is bidirectional.
-> - **Supervisor notification on batch accept restored under `0.1.6`**: notification dispatch is routed by capability detection, fixing the single-card and batch-accept paths that shared the same shape.
-> - **Actionable hints when concurrency slots are exhausted**: `0.1.6` introduced a subagent activation cap (8 active continuable subagents by default); when capacity is exhausted or cold resume is refused, a bare English error code is no longer the only feedback.
-> - **Board refresh button resets the auto-refresh countdown**: clicking refresh immediately restarts the full interval instead of continuing toward the old deadline.
-> - **"Define/Polish" clipboard template rewritten as a self-describing supervisor instruction**: the title states it is for the supervisor and makes the recipient role, next action, and scope explicit (handles definition/polish only — no code execution, no status or version change).
->
-> **DSH version compatibility**: **Declared host range** (from v0.16.1, `engines.dsh`): `>=0.1.5-rc.2 <0.1.8-0`; hosts verified in this cycle: `0.1.6-alpha.2` through `0.1.7-rc.2` (`0.1.7-rc.2` re-verified on 2026-09-25 with the v0.16.0 release tarball: T1–T5 all green, **10/0/0**; a per-package diff confirmed the subagent-catalog layer has zero code changes and the `llm` service's `listProviders`/`listModels`/`resolveModelInfo` signatures are byte-identical). **Bidirectional host comparison measured in this cycle (g-351)**: on `0.1.7-rc.1` the plugin now routes by **capability detection** across the host's reworked settings service — when the new API is present it uses the profile-entry `Config` → settings-form projection; the `sctx.settings.register is not a function` degradation warning is gone, profile-level defaults (e.g. `subagentMode`) set through the profile patch take effect (`mode_source=global`), the `graph_*` tool count stays at 44, and all `/api/dsh-graph*` routes register. On `0.1.6-alpha.2` the legacy path was re-run: namespace registration (`$DSH_HOME/settings.yaml`) and profile-level defaults still work, with **no regression**. The earlier `0.1.2-alpha.x` ~ `0.1.4` series remains backward compatible by tool and prompt contract, but was **not re-run in this cycle** and is **no longer inside the declared range from v0.16.1 on** (market install pre-flight blocks it conservatively).
->
-> **Platform scope**: **Linux (WSL2), native Windows, and macOS** (all three using the same package; **macOS was last verified on-device at `v0.11.0`**, and `core/platform.ts` plus the file-locking code are unchanged since `v0.11.0`). **This release, `v0.16.0`, has been verified on Linux (WSL2)**; **its Windows on-device gate (T1–T5) is executed by the owner on native Windows before this release, with the verdict recorded in `docs/release-checklist-v0.16.0.md` §3** — **no PASS is claimed in advance**; if that gate is not run before release, the release must be labeled "**Windows not verified**" (release gate red line 1). The on-device gate executor is `scripts/win-smoke-test.mjs` in the repository (`node win-smoke-test.mjs --tarball dsh-graph-0.16.0.tgz`).
->
-> **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`. Paths derived from `process.cwd()` are unaffected.
->
-> Official releases are distributed via npm and the dsh-market ecosystem.
+**Current version**: v0.16.1 (the latest version published on npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+
+**Host compatibility range**: `engines.dsh` declares `>=0.1.5-rc.2 <0.1.8-0` (the `-0` upper bound excludes every `0.1.8` prerelease and final release); host-aware markets such as dsh-market read it for card display and install/update pre-flight. **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`.
+
+**Platform status**:
+
+| Platform | Status for this release |
+|----------|-------------------------|
+| Linux / WSL2 | ✅ Verified on-device |
+| Native Windows | ⚠️ **Not verified** (most recent on-device verdict: [v0.16.0 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md)) |
+| macOS | ⚠️ **Not verified** (most recent on-device verdict: [v0.16.0 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md)) |
+
+All three platforms share the same package. **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
+
+**What's new (v0.16.1)**
+
+- Declared host compatibility range (`engines.dsh`), read by host-aware markets such as dsh-market for card display and install/update pre-flight.
+- Narrow-sidebar search now uses a single-column "Search results" aggregate lane, keeping the narrow tier a single vertical column with zero horizontal overflow.
+
+See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history; per-release gate verdicts live in the [v0.16.1 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.1.md) and the platform gate runbook in [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md). Official releases are distributed via npm and the dsh-market ecosystem.
 
 ---
 
@@ -252,7 +241,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 ### Agent Tools Reference
 
-dsh-graph equips Agents with a comprehensive set of `graph_*` tools:
+dsh-graph equips Agents with a comprehensive set of `graph_*` tools (47 in total):
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -300,12 +289,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools:
 | **Collaboration** | `graph_add_comment` | Append historical discussion or human feedback |
 | | `graph_handoff` | Export cross-session handover document (`HANDOFF.md`) |
 | | `graph_claim_supervisor` | Claim supervisor role in new session & update metadata |
-| | `graph_help` | Display usage instructions and 47-tool checklist |
-| **Validation** | `graph_validate` | Validate full invariants (states, cycles, card refs) |
-| | `graph_rebuild` | Rebuild goal state from `events.jsonl` and reconcile |
-| | `graph_handoff` | Export cross-session handover document (`HANDOFF.md`) |
-| | `graph_claim_supervisor` | Claim supervisor role in new session & update metadata |
-| | `graph_help` | Display usage instructions and claim guide |
+| | `graph_help` | Display usage instructions and the 47-tool checklist |
 | **Validation** | `graph_validate` | Validate full invariants (states, cycles, card refs) |
 | | `graph_rebuild` | Rebuild goal state from `events.jsonl` and reconcile |
 
@@ -314,6 +298,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools:
 ### Browser Kanban UI
 
 Embedded directly within the DSH Web console:
+
 - **2D Swimlane Layout**: View the progress of multiple versions and categories simultaneously;
 - **Live Streaming Updates**: Cards and the top status bar stream real-time execution updates; external file edits trigger visual highlights;
 - **Interactive Modals & Drawers**: Click cards to inspect quality criteria, context cards, attempt histories, and detailed instructions.
@@ -331,17 +316,18 @@ The sidebar's "**Kanban**" tile and the conversation page's "**Kanban**" tab are
 - **Narrow-width behaviour** (tiered by the **measured width of the board's root container** — the board element's own `clientWidth`, **not the window width and not the browser viewport width**):
   - **`≥ 480px` (wide tier)**: multiple swimlanes side by side, so versions / Backlog / Standalone are all visible at once;
   - **`< 480px` (single-lane tier)**: stage columns switch from side-by-side to **vertically stacked**, and the lane shown is chosen by the version selector (**exactly one of a specific version / Backlog / Standalone**; **when the workspace has no versions at all, the default landing lane is "Standalone"**, and the selector's current item reads "Standalone"); this tier has **no per-lane collapse toggle** (collapsing would leave an empty board), and it also **forces the toolbar into `⋯ Tools`** and **hides the DEBUG line**.
-  - **How to get the board into `< 480px`**: the host tab's width comes from the **tab layout mode**, not from dragging — measured at a 1600px viewport: single tab **719px**, **359px** per tab after the tab's `Split` mode (this mode scales with the window width), **799px** in `Fullscreen`. So the **default single-tab width (719px) lands in the wide tier** and no single lane appears; use the tab's **`Split`** mode, or narrow the window until the board panel measures <480px. Once there, it is obvious: the six stage blocks are **stacked vertically** and the version selector appears next to the lane title.
+  - **How to get the board into `< 480px`**: the host tab's width comes from the **tab layout mode**, not from dragging — measured at a 1600px viewport: single tab **719px**, **359px** per tab after the tab's `Split` mode (this mode scales with the window width), **799px** in `Fullscreen`. So the **default single-tab width (719px) lands in the wide tier** and no single lane appears; use the tab's **`Split`** mode, or narrow the window until the board panel measures <480px. Once there, it is obvious: the six stage blocks are **stacked vertically** and the version selector appears next to the lane title (current item: a specific version / Backlog / Standalone).
   - **Residual in the wide tier (measured)**: the wide-tier grid's minimum width is about **956px**, so whenever the board panel measures less than that (e.g. the default single tab at **719px**) the wide grid **still scrolls horizontally** and pushes the confirm / bulk-accept column out of view; the tier that actually removes horizontal scrolling is the single-lane one (<480px).
   - **The version selector is rendered only in the single-lane tier**: in the wide tier the board has **no** version selector at all. So an "All versions" string seen in the wide tier can only come from an **opened dropdown option list**, never from the current selection; and in the single-lane tier, before any explicit view choice, the current item is "Standalone" — **not** "All versions".
 
-See [`screenshot/sidebar-kanban.png`](https://github.com/miuzel/dsh-graph/blob/main/screenshot/sidebar-kanban.png) in the repository for a screenshot (fictional demo data nebula-notes, sidebar width in the `< 480px` single-lane tier); this npm package does not ship the repository's `screenshot/` directory, so only the repository path is given here.
+See [screenshot/sidebar-kanban.png](https://github.com/miuzel/dsh-graph/blob/main/screenshot/sidebar-kanban.png) in the repository for a screenshot (fictional demo data nebula-notes, sidebar width in the `< 480px` single-lane tier); this npm package does not ship the repository's `screenshot/` directory, so only the repository path is given here.
 
 ---
 
 ### Data Storage
 
 All data resides in `.dsh-graph/` within your workspace:
+
 - **Zero-Config Auto-Init**: Generates directory structure automatically upon first tool call without dummy demo data;
 - **Git Friendly**: Managed as plain YAML/Markdown files and an append-only `events.jsonl` event log;
 - **Auditability**: `events.jsonl` serves as the authoritative single source of truth, reconcilable at any time via `graph_rebuild`;
