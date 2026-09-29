@@ -590,10 +590,156 @@
           : attempts.map(row)));
     }
 
+    // g-374 F1/F3：完成摘要 tab —— 先 results.md（F2 规范化摘要，若存在），再按 attempt 倒序列出
+    // results-att-*.md；**不是只读**：F3-a（负责人硬需求）在 tab 内提供用户可直接点击的
+    // 「更新摘要」动作，点击即按 F2 规则重写 results.md（旧版归档），无需命令行/会话指令。
+    // 唯一新增网络请求是这一条显式用户动作（POST /api/dsh-graph/refresh-results）；
+    // 列表数据仍来自 /api/dsh-graph/goal 的 detail.results（零额外轮询）。
+    // 文件缺失/损坏/超大一律以可见文案降级（沿用 g-275 渲染期解引用保护：全程可选链，不抛错）。
+    function AttemptResults(props) {
+      const results = props.results ?? {};
+      const summary = results.summary ?? null;
+      const attempts = Array.isArray(results.attempts) ? results.attempts : [];
+      const omitted = Number(results.omitted) || 0;
+      const [busy, setBusy] = React.useState(false);
+      const [note, setNote] = React.useState(null);
+      const metaLine = (r) => {
+        const parts = [];
+        if (r?.generated_at) parts.push(`${dgT("results.generatedAt")} ${r.generated_at}`);
+        if (r?.source) parts.push(`source: ${r.source}`);
+        if (r?.stop_reason) parts.push(`stop_reason: ${r.stop_reason}`);
+        return parts.join(" ｜ ");
+      };
+      // g-374 F5：来源可辨——llm（详情级 LLM 摘要）/ deterministic（机器拼装，含 LLM 失败降级）/ manual（人工）。
+      const sourceBadge = (r) => {
+        if (!r?.source) return null;
+        const s = r.source === "llm"
+          ? dgT("results.sourceLlm")
+          : (r.source === "manual" ? dgT("results.sourceManual") : dgT("results.sourceDeterministic"));
+        const color = r.source === "llm"
+          ? "var(--dsw-alias-state-success-primary, #3a3)"
+          : (r.source === "manual" ? "var(--dsw-alias-state-warning-primary, #c93)" : "inherit");
+        return h("span", { key: "src", style: { ...S.meta, fontSize: 11, color } }, s);
+      };
+      const badges = (r) => [
+        sourceBadge(r),
+        r?.truncated ? h("span", { key: "trunc", style: { ...S.meta, fontSize: 11 } }, dgT("results.truncatedBadge")) : null,
+        r?.placeholder ? h("span", { key: "ph", style: { ...S.meta, fontSize: 11 } }, dgT("results.placeholderBadge")) : null,
+        r?.degraded ? h("span", { key: "deg", style: { ...S.meta, fontSize: 11 } }, `${dgT("results.degradedBadge")} (${r.degraded})`) : null,
+      ].filter(Boolean);
+      const block = (key, title, r) => h("div", { key, style: { ...S.subCard, marginTop: 4 } },
+        h("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 } },
+          h("span", { style: { fontSize: 12, fontWeight: 700 } }, title),
+          ...badges(r)),
+        h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } }, metaLine(r)),
+        r?.body
+          ? h(GoalMarkdown, { text: r.body })
+          : h("div", { style: { ...S.meta, fontSize: 12, marginTop: 2 } }, dgT("results.emptyBody")));
+      const sections = [];
+      if (summary) sections.push(block("summary", dgT("results.summaryTitle"), summary));
+      for (let i = 0; i < attempts.length; i++) {
+        const r = attempts[i];
+        sections.push(block(`att-${r?.attempt ?? i}`, `${dgT("results.attemptTitle")} ${r?.attempt ?? "?"}`, r));
+      }
+      // F3-a：用户可直接点击的「更新摘要」动作（进行中/成功/空态/失败都有可见反馈 + 归档文件名）。
+      const baseName = (p) => String(p ?? "").split(/[\\/]/).pop();
+      // 两步：① 先请**专用摘要子代理**（LLM，按目标详情写「改动/影响/值得注意」）落盘；
+      //       ② 子代理不可用/启动失败 ⇒ 同一次点击内回退到零 LLM 确定性写入（用户不会看到空手而归）。
+      const doRefresh = () => {
+        if (busy) return;
+        if (!graphUrl("/api/dsh-graph/refresh-results")) {
+          setNote({ kind: "err", text: dgT("results.refreshNoWorkspace") });
+          return;
+        }
+        setBusy(true);
+        setNote({ kind: "busy", text: dgT("results.refreshing") });
+        // 唯一网络出口：整个组件只有这一处 fetch，且只在点击回调内（无轮询、无挂载副作用）。
+        const post = (payload) => fetch(graphUrl("/api/dsh-graph/refresh-results"), {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        }).then((r) => r.json().then((d) => ({ httpOk: r.ok, d })));
+        post({ goal: props.goalId, llm: true })
+          .then(({ httpOk, d }) => {
+            if (d?.pending) {
+              setNote({ kind: "busy", text: dgT("results.refreshPending") + (d.child_id ? "（child: " + d.child_id + "）" : "") });
+              return null;
+            }
+            if (d?.cached) {
+              // 成本/防抖：历史未变且已有 LLM 摘要 ⇒ 服务端直接命中缓存（零 LLM 调用）。
+              setNote({ kind: "ok", text: dgT("results.refreshCached") });
+              return null;
+            }
+            if (d?.fallback || d?.reason) {
+              // 失败降级：服务端已写好 deterministic 并标注 fallback_reason（不抛错、不空手而归）。
+              setNote(d?.fallback
+                ? { kind: "skip", text: dgT("results.refreshFallbackNote") + (d.fallback_reason ? `（${d.fallback_reason}）` : "") }
+                : { kind: "skip", text: `${dgT("results.refreshSkipped")}（${d.reason}）` });
+              return null;
+            }
+            if (d?.ok) {
+              setNote({
+                kind: "ok",
+                text: d.archive
+                  ? `${dgT("results.refreshOk")} ｜ ${dgT("results.refreshArchived")} ${baseName(d.archive)}`
+                  : `${dgT("results.refreshOk")} ｜ ${dgT("results.refreshFirst")}`,
+              });
+              return null;
+            }
+            if (!httpOk) {
+              // 服务端 5xx/400（如 backlog 目标）：回退到确定性写入，仍给用户一个结果面。
+              return post({ goal: props.goalId }).then(({ httpOk: ok2, d: det }) => {
+                if (det?.ok) {
+                  setNote({
+                    kind: "ok",
+                    text: (det.archive
+                      ? `${dgT("results.refreshOk")} ｜ ${dgT("results.refreshArchived")} ${baseName(det.archive)}`
+                      : `${dgT("results.refreshOk")} ｜ ${dgT("results.refreshFirst")}`) +
+                      ` ｜ ${dgT("results.refreshFallback")}`,
+                  });
+                } else {
+                  setNote({ kind: "err", text: dgT("results.refreshFail") + (det?.error ?? d?.error ?? "") });
+                }
+                return null;
+              });
+            }
+            setNote({ kind: "err", text: dgT("results.refreshFail") + (d?.error ?? "") });
+            return null;
+          })
+          .catch((e) => setNote({ kind: "err", text: dgT("results.refreshFail") + String(e?.message ?? e) }))
+          .then(() => { if (typeof props.onRefreshed === "function") props.onRefreshed(); })
+          .then(() => setBusy(false));
+      };
+      const noteColor = note?.kind === "err"
+        ? "var(--dsw-alias-state-error-primary, #d66)"
+        : note?.kind === "ok"
+          ? "var(--dsw-alias-state-success-primary, #3a3)"
+          : "inherit";
+      return h("div", { key: "results", style: S.modalSection },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+          h("div", { style: S.modalH }, dgT("results.title")),
+          h("button", {
+            className: "dg-btn",
+            style: { ...S.btn, fontSize: 11, padding: "0 8px", opacity: busy ? 0.6 : 1 },
+            disabled: busy ? true : undefined,
+            title: dgT("results.refreshHint"),
+            onClick: (e) => { e.stopPropagation(); doRefresh(); },
+          }, busy ? dgT("results.refreshing") : dgT("results.refresh"))),
+        note
+          ? h("div", { style: { fontSize: 11, marginTop: 4, color: noteColor, opacity: note.kind === "skip" ? 0.85 : 1 } }, note.text)
+          : null,
+        omitted > 0
+          ? h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, `${dgT("results.omittedNote")}（${omitted}）`)
+          : null,
+        sections.length
+          ? h("div", null, ...sections)
+          : h("div", { style: { ...S.meta, fontSize: 12, marginTop: 4 } }, dgT("results.noResults")),
+        h("div", { style: { ...S.meta, fontSize: 11, marginTop: 6, opacity: 0.75 } }, dgT("results.writeNote")));
+    }
+
     function GoalModal(props) {
       useLocaleRevision();
       const [state, setState] = React.useState({ loading: true });
-      const [tab, setTab] = React.useState("detail"); // "detail" | "worktree" | "context" | "activity"
+      const [tab, setTab] = React.useState("detail"); // "detail" | "worktree" | "results" | "context" | "activity"
       const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
       const [logFilter, setLogFilter] = React.useState(""); // "" 全部 / 事件名
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新执行的模型路由（显示兜底）
@@ -900,6 +1046,11 @@
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
         ];
+        // g-374 F1/F3：「完成摘要」tab（results.md + results-att-*.md，attempt 倒序）；
+        // F3-a 在该 tab 内提供可直接点击的「更新摘要」动作（onRefreshed 重载详情显示新摘要）。
+        const resultsTab = [
+          h(AttemptResults, { key: "results", results: d.results, goalId: props.id, onRefreshed: load }),
+        ];
         const activityTab = (() => {
           const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));
           if (!meaningful.length) {
@@ -987,6 +1138,19 @@
               style: {
                 fontSize: 12, padding: "5px 14px", cursor: "pointer",
                 marginBottom: -1, borderRadius: "6px 6px 0 0",
+                border: "1px solid " + (tab === "results" ? "rgba(128,128,128,.35)" : "transparent"),
+                borderBottom: "none",
+                background: tab === "results" ? "rgba(128,128,128,.10)" : "transparent",
+                fontWeight: tab === "results" ? 700 : 400,
+                color: tab === "results" ? "var(--dsw-alias-label-primary, #8ab4ff)" : "inherit",
+                opacity: tab === "results" ? 1 : 0.7,
+              },
+              onClick: () => setTab("results"),
+            }, dgT("tab.results")),
+            h("button", {
+              style: {
+                fontSize: 12, padding: "5px 14px", cursor: "pointer",
+                marginBottom: -1, borderRadius: "6px 6px 0 0",
                 border: "1px solid " + (tab === "activity" ? "rgba(128,128,128,.35)" : "transparent"),
                 borderBottom: "none",
                 background: tab === "activity" ? "rgba(128,128,128,.10)" : "transparent",
@@ -1041,7 +1205,7 @@
             style: { border: "1px solid rgba(128,128,128,.35)", borderTop: "none",
                      borderRadius: "0 6px 6px 6px", padding: "10px 12px",
                      background: "rgba(128,128,128,.06)" },
-          }, tab === "detail" ? detailTab : tab === "worktree" ? worktreeTab : tab === "context" ? contextTab : activityTab),
+          }, tab === "detail" ? detailTab : tab === "worktree" ? worktreeTab : tab === "results" ? resultsTab : tab === "context" ? contextTab : activityTab),
         ];
       }
 

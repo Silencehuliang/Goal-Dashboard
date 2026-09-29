@@ -30,7 +30,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 47); // 全量 47 个 graph_* 工具（g-369 新增 graph_attach_shared_card/graph_detach_shared_card/graph_list_shared_cards）
+  assert.equal(registered.length, 49); // 全量 49 个 graph_* 工具（g-374 新增 graph_write_results/graph_refresh_results）
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };

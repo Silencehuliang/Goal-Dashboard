@@ -374,7 +374,11 @@ and `supervisor:<sessionId>` matching `project.yaml` `supervisor.session` are al
 `graph_amend_goal` record revisions｜ `graph_add_card / graph_fill_card / graph_review_card`
 information-collection cards (use only when the goal genuinely needs collection)｜ `graph_bind_collect_card` bind a collection subagent to a card (reverse-lookup parent_session_id from the session header)｜
 `graph_start_attempt` dispatch an execution attempt (`card` is only for collection dispatch)｜ `graph_report_status`
-report status｜ `graph_validate` full validation｜ `graph_rebuild` reconcile the event stream
+report status｜ `graph_validate` full validation｜ `graph_rebuild` reconcile the event stream｜
+`graph_write_results` manually write one attempt's completion summary (`source=manual` + writer annotation)｜
+`graph_refresh_results` regenerate `results.md` (zero-LLM fallback assembly, or a caller-supplied `content` body from the dedicated summarizer subagent that writes changes / impact / noteworthy items from the goal details, source=llm; previous version archived; single goal or a `goals[]` batch, content is single-goal only)
+—**when the supervisor makes a chore/patch or any other subagent-less change, or an attempt captured no output, it must write the result itself**, never leaving a result vacuum
+(dispatched output is captured automatically to `results-att-<attempt>.md`; no manual step is needed there)
 
 ## Switching Sessions
 

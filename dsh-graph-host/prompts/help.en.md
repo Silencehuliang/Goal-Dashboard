@@ -1,4 +1,4 @@
-dsh-graph is a plugin that organizes work into a "goal board". Available graph_* tools (47 total):
+dsh-graph is a plugin that organizes work into a "goal board". Available graph_* tools (49 total):
 
 ## Goal lifecycle
 - graph_create_goal(title[, version][, type]) create a goal (enters backlog; with version, schedule it; type: feature/bug/task/improvement/patch/chore);
@@ -17,6 +17,8 @@ dsh-graph is a plugin that organizes work into a "goal board". Available graph_*
 - graph_set_goal_type(goal, type) set type feature/bug/task/improvement/patch/chore;
 - graph_move_goal(goal, to[, version]) move goal between backlog / standalone goals/ / version;
 - graph_add_comment(goal, text) append a comment/feedback to the Comments section.
+- graph_write_results(goal, attempt, text[, source][, actor]) manually write one attempt's completion summary (source=manual and the writer are recorded by default); **after a lightweight change with no subagent (chore/patch), or an attempt that captured no output, the supervisor must write it proactively** (zero LLM calls, same format/path/overwrite policy as auto capture);
+- graph_refresh_results([goal][, goals][, content][, source][, llm][, force][, actor]) rewrite results.md (conclusion / changes and impact / criteria status / evidence references / key decisions / timeline / sources); `llm:true` dispatches the dedicated summarizer subagent (role=summarizer) to write what specifically changed, the impact surface and what deserves attention (source=llm, keyed by source_hash so an unchanged history never re-calls the LLM; force:true rewrites anyway; falls back to source=deterministic when unavailable); without content/llm the body is assembled from goal history with zero LLM calls; with content the caller-supplied body is used (manual for humans); the previous version is archived as results-archive-YYYYMMDDTHHMMSS.md; accepts a single goal or a goals[] batch (content is single-goal only) and reports written/skipped/failed/pending/cached per goal.
 
 ## Criteria · Cards · Attachments
 - graph_set_criteria(goal, criteria[]) register quality criteria first (criteria precede execution; hard rule);
@@ -63,7 +65,7 @@ dsh-graph is a plugin that organizes work into a "goal board". Available graph_*
 - graph_update_settings(patch) update project config (schema validation, comment preservation, atomic write).
 
 ## Help
-- graph_help() display this help (full 47-tool checklist with parameter reference).
+- graph_help() display this help (full 49-tool checklist with parameter reference).
 
 ## Claim supervisor
 **Execute this only when the person in charge explicitly asks you to take over as supervisor**—by default no session may automatically claim:
