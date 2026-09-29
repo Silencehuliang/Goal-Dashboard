@@ -998,6 +998,8 @@
       // g-233「搜索命中不得被视图过滤藏掉」因此既不回退也不需要原来的「挂起收窄」实现方式。
       // 纯派生：零新增状态真源、零新增持久化键（searchActiveQuery / searchMatches 都是既有 state）。
       // N=0（无命中）：仍进单列档（不回横向网格）但**不渲染空泳道**，既有「未找到匹配」空态在工具条上。
+      // g-367（负责人 2026-09-26 裁决「建侧边模式下搜索态版本分组」）：泳道内再**按版本/分区分段**
+      //（组头 + 计数，组内仍单列纵向）——组序/分桶口径见 search-groups.js（纯派生，空组不渲染）。
       const searchLaneActive = !!(narrowSingleTier && !!searchActiveQuery);
       const searchLaneMode = !!(searchLaneActive && searchMatches.length > 0);
       // 布局/行渲染的单列闸门：单泳道档（非搜索）∪ 搜索聚合泳道 —— 两者都用「minmax(0, 1fr)」单列模板。
@@ -1303,7 +1305,9 @@
               versionSlug: v.slug,
               versionName: v.name,
               isReleased: isRel,
-              laneKey: isRel ? "rellane-" + v.slug : "v-" + v.slug,
+              // g-367：泳道 key 约定收敛到 search-groups.js 的 versionLaneKey()（唯一真源）——
+              // 该 key 现在同时决定搜索命中的分区归属（聚合泳道的组头），不能再有两份字面量。
+              laneKey: versionLaneKey(v),
             });
           }
         }
@@ -1985,16 +1989,30 @@
       }
       for (const g of (b.standalone ?? [])) if (g && g.id) goalById.set(g.id, g);
       for (const g of (b.backlog ?? [])) if (g && g.id) goalById.set(g.id, g);
-      // g-366：单列「搜索结果」聚合泳道——顺序 == searchMatches 顺序，故 i/N 跳转的**次序**与纵向视觉
-      // 次序一致（跳转本身仍走既有 navigateToMatch ⇒ #goal-<id> / data-goal-id 锚点，卡片同一条 Card
-      // 渲染路径）。该泳道不参与跨泳道拖放（命中跨分区 ⇒ 没有唯一落点），故不传 drag。
+      // g-366：单列「搜索结果」聚合泳道——命中集合与**相对次序**沿用既有 searchMatches（i/N 跳转的
+      // 全局次序因此一字不改；跳转仍走既有 navigateToMatch ⇒ #goal-<id> / data-goal-id 锚点，
+      // 卡片同一条 Card 渲染路径）。该泳道不参与跨泳道拖放（命中跨分区 ⇒ 没有唯一落点），故不传 drag。
+      // g-367：泳道内再按**版本/分区**分段呈现（组头 + 计数，组内仍单列纵向）——组序与看板既有分区
+      // 顺序一致（活跃版本 → 已发布版本 → 独立目标 → backlog），已隐藏版本的命中单列一组置于末尾
+      //（g-233：命中不得被视图过滤藏掉）。分组只改「纵向落点」，不改搜索语义、不改匹配集合、不改
+      // i/N 次序；纯派生、零新增持久化键（组头不可折叠 ⇒ 无需折叠态记忆）。
+      // 组头名：版本组用版本名，独立目标/backlog/已隐藏版本复用既有 i18n 词条。
+      const searchGroupLabel = (grp) => {
+        if (grp.key === "standalone") return dgT("lane.standalone");
+        if (grp.key === "backlog") return dgT("view.backlogLane");
+        if (grp.key === SEARCH_GROUP_HIDDEN) return dgT("search.hiddenGroupLabel");
+        return grp.name || grp.key;
+      };
       const searchResultsLane = () => {
         const labelEl = h("div", {
           key: "search-lane-label",
           className: "dg-lane-label dg-search-lane-label",
           style: { ...S.laneLabel, background: "rgba(128,128,128,.06)" },
         }, dgT("search.laneLabel", { count: searchMatches.length }));
-        const cardEls = searchMatches.map((m) => {
+        // 分组纯派生（空组不渲染）；hiddenVersionSlugs 取**持久底账**而非「底账−搜索临时 unhide」的
+        // 有效集合，否则 i/N 跳进隐藏版本时该组会在末尾与常规版本位之间来回跳动（search-groups.js）。
+        const searchGroups = groupSearchMatches(b.versions, searchMatches, hiddenVersionSlugs);
+        const matchCard = (m) => {
           const g = goalById.get(m.id) ?? { id: m.id, title: m.title, status: m.status };
           const defExpanded = g.status !== "delivered" && g.status !== "blocked";
           const expanded = expandedGoals[g.id] ?? defExpanded;
@@ -2018,14 +2036,37 @@
             (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
             null,
             () => { forceFreshRef.current = true; load(); });
-        });
+        };
+        // 组头 + 组内卡片依次铺进同一条纵向 flex 列：组头是纯展示行（**无折叠开关**，故没有折叠态
+        // 需要持久化）；minWidth:0 + 省略号保证长版本名在窄容器里也不横向撑破。
+        const groupEls = [];
+        for (let gi = 0; gi < searchGroups.length; gi++) {
+          const grp = searchGroups[gi];
+          groupEls.push(h("div", {
+            key: "search-group-" + grp.key,
+            className: "dg-search-group-label",
+            style: {
+              ...S.laneLabel,
+              background: "rgba(128,128,128,.06)",
+              fontSize: 11,
+              padding: "3px 8px",
+              borderRadius: 4,
+              marginTop: gi === 0 ? 0 : 6,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            },
+          }, dgT("search.groupLabel", { name: searchGroupLabel(grp), count: grp.items.length })));
+          for (const m of grp.items) groupEls.push(matchCard(m));
+        }
         return [labelEl, h("div", {
           key: "search-lane-cards",
           className: "dg-search-lane-cards",
           // 单列网格里没有第 2 条网格线 ⇒ 内容占满整行；纵向 flex 让卡片各自成行、卡面全宽
           //（gridColumn "1 / -1" 与 g-352 纵向泳道同款；minWidth:0 保证窄容器内不横向撑破）。
           style: { ...S.cell, gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 4, minWidth: 0 },
-        }, ...cardEls)];
+        }, ...groupEls)];
       };
 
       const rows = [];

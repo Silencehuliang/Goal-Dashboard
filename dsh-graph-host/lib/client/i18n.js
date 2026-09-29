@@ -153,6 +153,10 @@
       'search.matchCount': '{count} 项匹配',
       // g-366：窄档搜索激活时单列「搜索结果」聚合泳道的标题
       'search.laneLabel': '搜索结果（{count}）',
+      // g-367：聚合泳道内的**分区组头**（{name} = 版本名 / 独立目标 / backlog / 已隐藏版本）+ 组内命中数
+      'search.groupLabel': '{name}（{count}）',
+      // g-367：已隐藏版本里命中的聚合组头（g-233：命中不得被视图过滤藏掉，故给它明确归属）
+      'search.hiddenGroupLabel': '已隐藏版本',
 
       // === 目标详情弹窗 ===
       'modal.loadingDetail': '加载详情…',
@@ -1178,6 +1182,10 @@
       'search.matchCount': '{count} matches',
       // g-366: title of the single-column "search results" aggregate lane in narrow tier
       'search.laneLabel': 'Search results ({count})',
+      // g-367: partition group header inside the aggregate lane (name = version / standalone / backlog / hidden)
+      'search.groupLabel': '{name} ({count})',
+      // g-367: aggregate group header for hits inside hidden versions (g-233: hits are never hidden by the view)
+      'search.hiddenGroupLabel': 'Hidden versions',
 
       // === Goal detail modal ===
       'modal.loadingDetail': 'Loading details…',
