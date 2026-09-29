@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
@@ -28,6 +29,30 @@ import { readEvents } from "../events.ts";
 
 const OVERWRITE_NOTE = "本文件由机器生成，下次写入整体覆盖";
 
+/**
+ * 原子写残留检查（**名字无关**）：原子写前后目录清单必须逐项相等。
+ *
+ * 为什么不用名字过滤：`core/ops.ts:atomicWrite` 的真实临时名是**同目录**的 `.tmp-<randomUUID()>`
+ * （`const tmp = join(dir, \`.tmp-${randomUUID()}\`)`），并**不是** `core/transaction.ts:180` 的
+ * `<file>.tmp.<pid>`（那条实现服务于另一条写路径）。按名字过滤会随实现改名而空转（恒真）；
+ * 按「清单相等」则任何新出现的半文件（无论叫什么）都会红。
+ */
+function dirEntries(dir: string): string[] {
+  return readdirSync(dir).sort();
+}
+
+function assertNoNewEntries(dir: string, before: string[], label: string, allowed: string[] = []): void {
+  const after = dirEntries(dir);
+  const added = after.filter((n) => !before.includes(n));
+  const unexpected = added.filter((n) => !allowed.includes(n));
+  assert.deepEqual(
+    unexpected, [],
+    `${label}：除预期目标（${allowed.join("、") || "无"}）外不得出现任何新文件（半文件/临时残留一律算违规）；实际新增：${added.join("、") || "无"}`,
+  );
+  const removed = before.filter((n) => !after.includes(n));
+  assert.deepEqual(removed, [], `${label}：不得删除既有文件；实际删除：${removed.join("、") || "无"}`);
+}
+
 function setup() {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-"));
   const root = join(ws, ".dsh-graph");
@@ -51,6 +76,7 @@ test("g-374 F1：正常输出落盘——<goalDir>/results-att-001.md 命名 + �
   const { root, goal, attempt, dir, goalFile } = setup();
   assert.equal(attempt, "att-001", "attempt id 与文件命名的一一映射前提");
 
+  const dirBefore = dirEntries(dir);
   const res = writeAttemptResults(root, {
     goal, attempt, source: "subagent/end", childId: "child-abc",
     stopReason: "completed", text: "第一行\n第二行", actor: "supervisor:sess-1",
@@ -94,29 +120,60 @@ test("g-374 F1：正常输出落盘——<goalDir>/results-att-001.md 命名 + �
   assert.equal(d.overwrite, false);
   assert.equal(d.file, res.file);
 
-  // 原子写不留半文件（F1 复核 must-fix①：原断言只查 `.tmp-*` 前缀，而 atomicWrite 的真实临时名是
-  // `<目标文件>.tmp.<pid>`（core/transaction.ts:180）⇒ 该断言恒真（vacuous）。这里改为钉住**真实**
-  // 临时名，并保留「任何 *.tmp.* 残留」的广义检查；反恒真对照见下方「断言非恒真」用例。
-  const realTmp = `${res.file}.tmp.${process.pid}`;
-  assert.equal(existsSync(realTmp), false, `原子写不得残留真实临时文件 ${basename(realTmp)}`);
-  assert.deepEqual(readdirSync(dir).filter((n) => n.includes(".tmp.")), [], "不得残留任何 *.tmp.* 半文件");
+  // 原子写不留半文件（F1 复核 must-fix①：**名字无关**的清单相等检查）。
+  // 原断言只查 `.tmp-*` 前缀；`a7d1f18` 里改成 `${file}.tmp.${pid}` + 只查 `.tmp.` 子串，
+  // 而本路径真实临时名是 `.tmp-<uuid>` ⇒ 两条都恒真（vacuous）。现在按清单相等判定。
+  assertNoNewEntries(dir, dirBefore, "原子写不得留下任何新文件", [basename(res.file)]);
 });
 
-test("g-374 F1：原子写残留断言**非恒真**（must-fix① 反恒真对照：造出真实临时名即必红）", () => {
+test("g-374 F1：原子写残留断言**非恒真**（must-fix① 反恒真对照：造出真实 `.tmp-<uuid>` 半文件即必红）", () => {
   const { root, goal, attempt, dir } = setup();
-  const res = writeAttemptResults(root, { goal, attempt, source: "subagent/end", stopReason: "completed", text: "x" });
-  const realTmp = `${res.file}.tmp.${process.pid}`;
-  // 人为造出「atomicWrite 会留下的那种半文件」，判定函数必须能看见它（否则断言与实现不同名 = 恒真）。
-  writeFileSync(realTmp, "半文件");
+  writeAttemptResults(root, { goal, attempt, source: "subagent/end", stopReason: "completed", text: "x" });
+  const before = dirEntries(dir);
+  // 造出「atomicWrite 真会留下的那种半文件」：同目录 `.tmp-<uuid>`（与实现逐字同名）。
+  const residue = join(dir, `.tmp-${randomUUID()}`);
+  writeFileSync(residue, "半文件");
   try {
-    assert.equal(existsSync(realTmp), true);
-    assert.notDeepEqual(readdirSync(dir).filter((n) => n.includes(".tmp.")), [], "残留检查必须能命中真实临时名");
-    assert.ok(readdirSync(dir).includes(basename(realTmp)), "临时名写法与 atomicWrite 逐字一致");
+    assert.ok(dirEntries(dir).includes(basename(residue)), "真实临时名必须被清单看见（名字无关）");
+    assert.throws(
+      () => assertNoNewEntries(dir, before, "残留检查", []),
+      /不得出现任何新文件/,
+      "有残留时该断言必须红（证明非恒真：`.tmp-<uuid>` 不在预期目标白名单里）",
+    );
+    // 即使把「预期目标」白名单放宽到别的名字，残留仍然会被抓到（不是只认某一种名字）。
+    assert.throws(
+      () => assertNoNewEntries(dir, before, "残留检查", ["results-att-001.md"]),
+      /不得出现任何新文件/,
+      "白名单里有真实目标文件名也照样抓 `.tmp-<uuid>` 残留",
+    );
+    // 旧写法（只过滤 `.tmp.` 子串）在这个真实名字上会**空转**：`.tmp-<uuid>` 不含 "tmp."。
+    assert.deepEqual(readdirSync(dir).filter((n) => n.includes(".tmp.")), [], "旧的 `.tmp.` 子串过滤看不见 `.tmp-<uuid>`（正是恒真的根因）");
   } finally {
-    rmSync(realTmp, { force: true });
+    rmSync(residue, { force: true });
   }
-  assert.deepEqual(readdirSync(dir).filter((n) => n.includes(".tmp.")), [], "对照后必须清干净");
+  assertNoNewEntries(dir, before, "对照后必须回到原清单", []);
 });
+
+test("g-374 F1：临时名真源——本路径 atomicWrite 用同目录 `.tmp-<uuid>`（不是 `<file>.tmp.<pid>`）", () => {
+  // 钉住真源，避免注释/断言再次引用别的写路径的命名。
+  const opsSrc = readFileSync(new URL("../ops.ts", import.meta.url), "utf8");
+  assert.match(opsSrc, /const tmp = join\(dir, `\.tmp-\$\{randomUUID\(\)\}`\);/, "ops.ts atomicWrite 的临时名真源");
+  assert.doesNotMatch(opsSrc, /\.tmp\.\$\{process\.pid\}/, "本路径不得使用 `<file>.tmp.<pid>` 命名");
+  // 旧断言在真实名字上的空转已在上一条用例实测（`.tmp.` 过滤命中 0 项）；这里给出正向证据：
+  const probe = join(dirEntries_probe(), `.tmp-${randomUUID()}`);
+  try {
+    writeFileSync(probe, "x");
+    assert.deepEqual(readdirSync(dirname(probe)).filter((n) => n.includes(".tmp.")), [], "`.tmp.` 子串过滤对 `.tmp-<uuid>` 命中 0 项（空转）");
+    assert.deepEqual(readdirSync(dirname(probe)).filter((n) => /^\.tmp-/.test(n)), [basename(probe)], "`.tmp-` 前缀过滤能命中真实名字");
+  } finally {
+    rmSync(probe, { force: true });
+  }
+});
+
+function dirEntries_probe(): string {
+  const d = mkdtempSync(join(tmpdir(), "dsh-graph-g374-probe-"));
+  return d;
+}
 
 test("g-374 F1：goalDetail 新增只读 results 字段（不改 board 缓存；attempt 倒序）", () => {
   const { root, goal, attempt } = setup();
@@ -254,6 +311,7 @@ test("g-374 F1：截断——默认 64 KiB、不切坏多字节字符、文件�
   const body = "中".repeat(5000); // 3 字节/字 ⇒ 15000 字节
   assert.ok(Buffer.byteLength(body, "utf8") > 2000);
 
+  const dirBefore = dirEntries(dir);
   const res = writeAttemptResults(root, { goal, attempt, source: "subagent/end", childId: "c1", stopReason: "completed", text: body, maxBytes: 2000 });
   assert.equal(res.truncated, true);
   assert.equal(res.bytes, Buffer.byteLength(readFileSync(join(dir, `results-${attempt}.md`), "utf8").split("## " + attempt + " 完成摘要\n\n")[1].trimEnd(), "utf8"));
@@ -266,9 +324,8 @@ test("g-374 F1：截断——默认 64 KiB、不切坏多字节字符、文件�
   const ev = resultsEvents(root, "attempt.results_written")[0].details;
   assert.equal(ev.truncated, true, "事件标注截断");
   assert.equal(ev.original_bytes, Buffer.byteLength(body, "utf8"));
-  // must-fix①：与实现同名的真实临时名 + 广义残留检查（原 `.tmp-*` 前缀断言与实际命名不符 = 恒真）
-  assert.equal(existsSync(`${join(dir, `results-${attempt}.md`)}.tmp.${process.pid}`), false, "不得残留真实临时文件");
-  assert.deepEqual(readdirSync(dir).filter((n) => n.includes(".tmp.")), [], "不得残留任何 *.tmp.* 半文件");
+  // must-fix①：名字无关的清单相等检查（截断路径同样不得留下任何新文件）
+  assertNoNewEntries(dir, dirBefore, "截断写入", [basename(res.file)]);
 });
 
 // ============================================================================

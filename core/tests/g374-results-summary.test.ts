@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   init,
   createGoal,
@@ -77,6 +78,7 @@ test("g-374 F2：由目标历史重写 results.md——六节齐全 + 规范化�
   const { root, goal, goalFile } = setup();
   const attempt = seed(root, goal);
 
+  const dirBefore = readdirSync(dirname(goalFile)).sort();
   const res = refreshGoalResults(root, goal, { actor: "human:gui" });
   assert.equal(res.written, true, "有来源必须写入");
   assert.equal(res.skipped, false);
@@ -120,9 +122,36 @@ test("g-374 F2：由目标历史重写 results.md——六节齐全 + 规范化�
   assert.equal(d.source_hash, res.source_hash);
   assert.equal(d.actor_writer, "human:gui");
   assert.deepEqual(d.sources, res.sources);
-  // 原子写：不留真实临时名（F1 复核 must-fix①）
-  assert.equal(existsSync(`${file}.tmp.${process.pid}`), false, "不得残留真实临时文件");
-  assert.deepEqual(readdirSync(dirname(goalFile)).filter((n) => n.includes(".tmp.")), []);
+  // 原子写：不留半文件（F1 复核 must-fix①：**名字无关**的清单相等检查）。
+  // 本路径（core/ops.ts:atomicWrite）真实临时名是同目录 `.tmp-<randomUUID()>`；按名字过滤会空转，
+  // 故此处用「除预期目标 results.md 外不得出现任何新文件」，任何命名的残留都会红。
+  const added = readdirSync(dirname(goalFile)).sort().filter((n) => !dirBefore.includes(n));
+  assert.deepEqual(added, [RESULTS_SUMMARY_NAME], `除 ${RESULTS_SUMMARY_NAME} 外不得新增任何文件（半文件一律算违规）`);
+  assert.deepEqual(dirBefore.filter((n) => !readdirSync(dirname(goalFile)).includes(n)), [], "不得删除既有文件");
+});
+
+test("g-374 F2：原子写残留检查**非恒真**（造出真实 `.tmp-<uuid>` 半文件即红；旧的 `.tmp.` 子串过滤空转）", () => {
+  const { root, goal, goalFile } = setup();
+  seed(root, goal);
+  const dir = dirname(goalFile);
+  const before = readdirSync(dir).sort();
+  const residue = join(dir, `.tmp-${randomUUID()}`); // 与 core/ops.ts:atomicWrite 逐字同名的真实半文件
+  writeFileSync(residue, "半文件");
+  try {
+    const addedOldWay = readdirSync(dir).filter((n) => n.includes(".tmp."));
+    assert.deepEqual(addedOldWay, [], "旧写法（只过滤 `.tmp.` 子串）看不见 `.tmp-<uuid>` ⇒ 恒真");
+    const after = readdirSync(dir).sort();
+    const added = after.filter((n) => !before.includes(n));
+    assert.ok(added.includes(basename(residue)), "残留必须被清单看见（名字无关）");
+    assert.throws(
+      () => assert.deepEqual(added.filter((n) => n !== RESULTS_SUMMARY_NAME), [], "除 results.md 外不得新增任何文件"),
+      /不得新增任何文件/,
+      "有残留时该判定必须红（证明非恒真）",
+    );
+  } finally {
+    rmSync(residue, { force: true });
+  }
+  assert.deepEqual(readdirSync(dir).sort().filter((n) => !before.includes(n)), [], "对照后必须回到原清单");
 });
 
 test("g-374 F2：source_hash 只代表历史状态——同一历史重复刷新指纹不变、历史变化则指纹变化", () => {
