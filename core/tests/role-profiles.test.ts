@@ -26,8 +26,9 @@ import { apply, formatAttemptPrompt } from "../../dist/index.js";
 // ===== 判据 1：supervisor/executor/collector/reviewer/PM 角色能力与 prompt 要求统一映射测试 =====
 
 test("判据 1 - 角色枚举与能力 Profile 完整性定义", () => {
-  const expectedRoles = ["supervisor", "executor", "collector", "reviewer", "pm"];
-  assert.deepEqual(SUBAGENT_ROLES as readonly string[], expectedRoles, "必须包含 5 大通用角色");
+  // g-374 F2：新增 summarizer（专用完成摘要撰写员——重新摘要由 LLM 产出正文，写入器仍零 LLM）。
+  const expectedRoles = ["supervisor", "executor", "collector", "reviewer", "pm", "summarizer"];
+  assert.deepEqual(SUBAGENT_ROLES as readonly string[], expectedRoles, "必须包含 6 大通用角色");
 
   for (const role of expectedRoles) {
     const profile = getRoleProfile(role as any);

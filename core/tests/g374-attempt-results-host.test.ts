@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { init, createGoal, setCriteria, findGoalFile, loadGoal } from "../ops.ts";
+import {
+  init, createGoal, setCriteria, findGoalFile, loadGoal,
+  stripAttemptReportSkeleton,
+} from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
 
@@ -86,7 +89,7 @@ function resultsEvents(root: string, name: string) {
 // 判据 1（零 token）+ 判据 2（事件回调侧落盘）
 // ============================================================================
 
-test("g-374 F1：零 token——派发链路无新增 LLM 调用/会话，注入文本不含任何摘要指令", async () => {
+test("g-374 F1+F6：零 token——派发链路无新增 LLM 调用/会话，除报文骨架尾注外注入文本不含任何摘要指令", async () => {
   const h = createHarness();
   const { goal } = prepare(h);
   const res = await dispatch(h, goal);
@@ -94,8 +97,12 @@ test("g-374 F1：零 token——派发链路无新增 LLM 调用/会话，注入
   assert.ok(res.child_id, "派发成功并绑定 child");
   assert.equal(h.capturedRequests.length, 1, "一次派发只产生一次子代理会话（无额外 LLM 调用）");
   const prompt = h.capturedRequests[0].request.prompt[0].text;
-  assert.doesNotMatch(prompt, /完成摘要|results-att|lastAssistantMessage|results\.md/,
-    "严禁把「写总结」塞进子代理 prompt（零 token 硬判据）");
+  // F6：注入文本尾部新增「交回报文骨架」尾注块（单一真源 core/ops.ts），该块**允许**提到 results.md；
+  // 其余部分仍是「严禁把写总结塞进子代理 prompt」的零 token 语义 ⇒ 剥离尾注块后判定。
+  const stripped = stripAttemptReportSkeleton(prompt);
+  assert.equal(stripped.stripped, true, "注入文本必须含报文骨架尾注块（F6）");
+  assert.doesNotMatch(stripped.text, /完成摘要|results-att|lastAssistantMessage|results\.md/,
+    "剥离骨架尾注后，prompt 仍不得含任何「写总结」指令（零 token 硬判据）");
 
   // 事件到达不产生任何新的子代理会话
   h.emit("subagent/end", { id: "child-fixed-1", local: true, stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "x" }] });

@@ -129,7 +129,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 49 个 `graph_*` 工具）
 | **评审裁决** | `graph_resolve_accept` | 裁决交付验收（verdict: accept / object） |
 | **协作与交接** | `graph_add_comment` | 向目标追加可追溯的讨论与反馈历史 |
 | | `graph_write_results` | 人工写入 attempt 完成摘要（source=manual + 写入者标注；无子代理的轻量改动兜底） |
-| | `graph_refresh_results` | 从目标历史零 LLM 重写 `results.md`（旧版自动归档；支持批量 goals[]） |
+| | `graph_refresh_results` | 重写 `results.md`：零 LLM 兜底拼装，或采用专用摘要子代理/人工产出的 `content`（旧版自动归档；支持批量 goals[]） |
 | | `graph_handoff` | 生成跨会话交接文档 `HANDOFF.md` |
 | | `graph_claim_supervisor` | 新会话接管 Supervisor 并更新会话元数据 |
 | | `graph_help` | 输出插件功能说明与 49 个工具速查清单 |
@@ -290,7 +290,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools (49 in total
 | **Review & Verdict** | `graph_resolve_accept` | Accept or object to delivered attempts |
 | **Collaboration** | `graph_add_comment` | Append historical discussion or human feedback |
 | | `graph_write_results` | Manually write an attempt completion summary (source=manual + writer annotation; fallback for subagent-less changes) |
-| | `graph_refresh_results` | Regenerate `results.md` from goal history with zero LLM calls (previous version archived; supports a goals[] batch) |
+| | `graph_refresh_results` | Regenerate `results.md`: zero-LLM fallback assembly, or a caller-supplied `content` body from the dedicated summarizer subagent / a human (previous version archived; supports a goals[] batch) |
 | | `graph_handoff` | Export cross-session handover document (`HANDOFF.md`) |
 | | `graph_claim_supervisor` | Claim supervisor role in new session & update metadata |
 | | `graph_help` | Display usage instructions and the 49-tool checklist |

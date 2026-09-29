@@ -610,7 +610,19 @@
         if (r?.stop_reason) parts.push(`stop_reason: ${r.stop_reason}`);
         return parts.join(" ｜ ");
       };
+      // g-374 F5：来源可辨——llm（详情级 LLM 摘要）/ deterministic（机器拼装，含 LLM 失败降级）/ manual（人工）。
+      const sourceBadge = (r) => {
+        if (!r?.source) return null;
+        const s = r.source === "llm"
+          ? dgT("results.sourceLlm")
+          : (r.source === "manual" ? dgT("results.sourceManual") : dgT("results.sourceDeterministic"));
+        const color = r.source === "llm"
+          ? "var(--dsw-alias-state-success-primary, #3a3)"
+          : (r.source === "manual" ? "var(--dsw-alias-state-warning-primary, #c93)" : "inherit");
+        return h("span", { key: "src", style: { ...S.meta, fontSize: 11, color } }, s);
+      };
       const badges = (r) => [
+        sourceBadge(r),
         r?.truncated ? h("span", { key: "trunc", style: { ...S.meta, fontSize: 11 } }, dgT("results.truncatedBadge")) : null,
         r?.placeholder ? h("span", { key: "ph", style: { ...S.meta, fontSize: 11 } }, dgT("results.placeholderBadge")) : null,
         r?.degraded ? h("span", { key: "deg", style: { ...S.meta, fontSize: 11 } }, `${dgT("results.degradedBadge")} (${r.degraded})`) : null,
@@ -631,18 +643,39 @@
       }
       // F3-a：用户可直接点击的「更新摘要」动作（进行中/成功/空态/失败都有可见反馈 + 归档文件名）。
       const baseName = (p) => String(p ?? "").split(/[\\/]/).pop();
+      // 两步：① 先请**专用摘要子代理**（LLM，按目标详情写「改动/影响/值得注意」）落盘；
+      //       ② 子代理不可用/启动失败 ⇒ 同一次点击内回退到零 LLM 确定性写入（用户不会看到空手而归）。
       const doRefresh = () => {
         if (busy) return;
-        const url = graphUrl("/api/dsh-graph/refresh-results");
-        if (!url) { setNote({ kind: "err", text: dgT("results.refreshNoWorkspace") }); return; }
+        if (!graphUrl("/api/dsh-graph/refresh-results")) {
+          setNote({ kind: "err", text: dgT("results.refreshNoWorkspace") });
+          return;
+        }
         setBusy(true);
         setNote({ kind: "busy", text: dgT("results.refreshing") });
-        fetch(url, {
+        // 唯一网络出口：整个组件只有这一处 fetch，且只在点击回调内（无轮询、无挂载副作用）。
+        const post = (payload) => fetch(graphUrl("/api/dsh-graph/refresh-results"), {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ goal: props.goalId }),
-        })
-          .then((r) => r.json().then((d) => ({ httpOk: r.ok, d })))
+          body: JSON.stringify(payload),
+        }).then((r) => r.json().then((d) => ({ httpOk: r.ok, d })));
+        post({ goal: props.goalId, llm: true })
           .then(({ httpOk, d }) => {
+            if (d?.pending) {
+              setNote({ kind: "busy", text: dgT("results.refreshPending") + (d.child_id ? "（child: " + d.child_id + "）" : "") });
+              return null;
+            }
+            if (d?.cached) {
+              // 成本/防抖：历史未变且已有 LLM 摘要 ⇒ 服务端直接命中缓存（零 LLM 调用）。
+              setNote({ kind: "ok", text: dgT("results.refreshCached") });
+              return null;
+            }
+            if (d?.fallback || d?.reason) {
+              // 失败降级：服务端已写好 deterministic 并标注 fallback_reason（不抛错、不空手而归）。
+              setNote(d?.fallback
+                ? { kind: "skip", text: dgT("results.refreshFallbackNote") + (d.fallback_reason ? `（${d.fallback_reason}）` : "") }
+                : { kind: "skip", text: `${dgT("results.refreshSkipped")}（${d.reason}）` });
+              return null;
+            }
             if (d?.ok) {
               setNote({
                 kind: "ok",
@@ -650,14 +683,30 @@
                   ? `${dgT("results.refreshOk")} ｜ ${dgT("results.refreshArchived")} ${baseName(d.archive)}`
                   : `${dgT("results.refreshOk")} ｜ ${dgT("results.refreshFirst")}`,
               });
-            } else if (httpOk && d?.reason) {
-              setNote({ kind: "skip", text: `${dgT("results.refreshSkipped")}（${d.reason}）` });
-            } else {
-              setNote({ kind: "err", text: dgT("results.refreshFail") + (d?.error ?? "") });
+              return null;
             }
-            if (typeof props.onRefreshed === "function") props.onRefreshed();
+            if (!httpOk) {
+              // 服务端 5xx/400（如 backlog 目标）：回退到确定性写入，仍给用户一个结果面。
+              return post({ goal: props.goalId }).then(({ httpOk: ok2, d: det }) => {
+                if (det?.ok) {
+                  setNote({
+                    kind: "ok",
+                    text: (det.archive
+                      ? `${dgT("results.refreshOk")} ｜ ${dgT("results.refreshArchived")} ${baseName(det.archive)}`
+                      : `${dgT("results.refreshOk")} ｜ ${dgT("results.refreshFirst")}`) +
+                      ` ｜ ${dgT("results.refreshFallback")}`,
+                  });
+                } else {
+                  setNote({ kind: "err", text: dgT("results.refreshFail") + (det?.error ?? d?.error ?? "") });
+                }
+                return null;
+              });
+            }
+            setNote({ kind: "err", text: dgT("results.refreshFail") + (d?.error ?? "") });
+            return null;
           })
           .catch((e) => setNote({ kind: "err", text: dgT("results.refreshFail") + String(e?.message ?? e) }))
+          .then(() => { if (typeof props.onRefreshed === "function") props.onRefreshed(); })
           .then(() => setBusy(false));
       };
       const noteColor = note?.kind === "err"

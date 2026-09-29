@@ -376,7 +376,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 `graph_start_attempt` 派发执行 attempt（`card` 参数仅用于信息收集派发）｜ `graph_report_status`
 状态汇报｜ `graph_validate` 全量校验｜ `graph_rebuild` 事件流对账｜
 `graph_write_results` 人工写某次 attempt 的完成摘要（`source=manual` + 写入者标注）｜
-`graph_refresh_results` 从目标历史零 LLM 重写 `results.md`（旧版归档；单目标或批量 `goals[]`）
+`graph_refresh_results` 重写 `results.md`（零 LLM 兜底拼装 / 或采用 `content`：专用摘要子代理按目标详情写「改动 / 影响 / 值得注意」，source=llm；旧版归档；单目标或批量 `goals[]`，content 仅限单目标）
 ——**主管自做 chore/patch 等无子代理改动、或 attempt 没截获到输出时必须自己补写结果**，不留结果真空
 （派发执行的输出由插件自动截获到 `results-att-<attempt>.md`，无需手工）
 

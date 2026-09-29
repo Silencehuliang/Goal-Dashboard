@@ -27,6 +27,7 @@ import {
   RESULTS_SUMMARY_NAME,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
+import { dirEntries, assertNoNewEntries } from "./_residue-guard.ts";
 
 // g-374 F2（+ 修 F1 复核 must-fix②）：`results.md` 规范化摘要的**零 LLM** 重写契约。
 // 覆盖判据 4：由目标历史确定性重写、旧版归档不覆盖、结果来源为空时优雅空态、
@@ -93,7 +94,7 @@ test("g-374 F2：由目标历史重写 results.md——六节齐全 + 规范化�
   assert.match(raw, /^<!-- dsh-graph:results:begin -->/, "机器头起始标记");
   for (const field of [
     "kind: summary", "generated_at: ", `goal: ${goal}`, "title: 规范化摘要", "status: ",
-    "source: history", "actor: human:gui", "truncated: false",
+    "source: deterministic", "actor: human:gui", "truncated: false",
     "sources: comments=1 directive=yes attempts=1 results_files=1", "source_hash: ", "bytes: ",
   ]) {
     assert.ok(raw.includes(field), `机器头缺字段：${field}`);
@@ -125,33 +126,42 @@ test("g-374 F2：由目标历史重写 results.md——六节齐全 + 规范化�
   // 原子写：不留半文件（F1 复核 must-fix①：**名字无关**的清单相等检查）。
   // 本路径（core/ops.ts:atomicWrite）真实临时名是同目录 `.tmp-<randomUUID()>`；按名字过滤会空转，
   // 故此处用「除预期目标 results.md 外不得出现任何新文件」，任何命名的残留都会红。
-  const added = readdirSync(dirname(goalFile)).sort().filter((n) => !dirBefore.includes(n));
-  assert.deepEqual(added, [RESULTS_SUMMARY_NAME], `除 ${RESULTS_SUMMARY_NAME} 外不得新增任何文件（半文件一律算违规）`);
-  assert.deepEqual(dirBefore.filter((n) => !readdirSync(dirname(goalFile)).includes(n)), [], "不得删除既有文件");
+  assertNoNewEntries(dirname(goalFile), dirBefore, `除 ${RESULTS_SUMMARY_NAME} 外`, [RESULTS_SUMMARY_NAME]);
 });
 
-test("g-374 F2：原子写残留检查**非恒真**（造出真实 `.tmp-<uuid>` 半文件即红；旧的 `.tmp.` 子串过滤空转）", () => {
+test("g-374 F2：原子写残留检查**非恒真**——摘要侧调用与 F1 同一份共享 helper（造出真实半文件即红）", () => {
   const { root, goal, goalFile } = setup();
   seed(root, goal);
   const dir = dirname(goalFile);
-  const before = readdirSync(dir).sort();
+  const before = dirEntries(dir); // 共享 helper（core/tests/_residue-guard.ts）
   const residue = join(dir, `.tmp-${randomUUID()}`); // 与 core/ops.ts:atomicWrite 逐字同名的真实半文件
   writeFileSync(residue, "半文件");
   try {
-    const addedOldWay = readdirSync(dir).filter((n) => n.includes(".tmp."));
+    const addedOldWay = dirEntries(dir).filter((n) => n.includes(".tmp."));
     assert.deepEqual(addedOldWay, [], "旧写法（只过滤 `.tmp.` 子串）看不见 `.tmp-<uuid>` ⇒ 恒真");
-    const after = readdirSync(dir).sort();
-    const added = after.filter((n) => !before.includes(n));
+    const added = dirEntries(dir).filter((n) => !before.includes(n));
     assert.ok(added.includes(basename(residue)), "残留必须被清单看见（名字无关）");
+    // 关键：这里调的是**产品侧与 F1 共用的同一个**判定函数；若它被改成恒真，本断言必红。
     assert.throws(
-      () => assert.deepEqual(added.filter((n) => n !== RESULTS_SUMMARY_NAME), [], "除 results.md 外不得新增任何文件"),
-      /不得新增任何文件/,
-      "有残留时该判定必须红（证明非恒真）",
+      () => assertNoNewEntries(dir, before, "残留检查", [RESULTS_SUMMARY_NAME]),
+      /不得出现任何新文件/,
+      "有残留时共享判定必须红（证明非恒真，且不是自指的局部实现）",
     );
   } finally {
     rmSync(residue, { force: true });
   }
-  assert.deepEqual(readdirSync(dir).sort().filter((n) => !before.includes(n)), [], "对照后必须回到原清单");
+  assertNoNewEntries(dir, before, "对照后", []);
+});
+
+test("g-374 F2：共享 helper 被 F1 与摘要侧同时引用（单一真源，禁止各写一份）", () => {
+  const a = readFileSync(join(import.meta.dirname, "g374-attempt-results.test.ts"), "utf8");
+  const b = readFileSync(join(import.meta.dirname, "g374-results-summary.test.ts"), "utf8");
+  for (const [name, src] of [["F1", a], ["摘要", b]] as const) {
+    assert.match(src, /from "\.\/_residue-guard\.ts"/, `${name} 套件必须 import 共享 helper`);
+    // 注意：断言文本本身不能与「禁止出现的字面量」相同，否则会自匹配（拼出来即可）。
+    const localImpl = "function assert" + "NoNewEntries(";
+    assert.ok(!src.includes(localImpl), `${name} 套件不得自带第二份实现`);
+  }
 });
 
 test("g-374 F2：source_hash 只代表历史状态——同一历史重复刷新指纹不变、历史变化则指纹变化", () => {
@@ -212,7 +222,7 @@ test("g-374 F2：重复刷新 = 每次重写 + 每次归档；旧版逐字保留
   const proj = goalResults(root, goal);
   assert.deepEqual(proj.attempts.map((a) => a.attempt), ["att-001"]);
   assert.deepEqual(proj.archives, goalResultsArchiveFiles(goalFile), "归档投影可枚举");
-  assert.equal(proj.summary?.source, "history", "results.md 作为 summary 投影（source=history）");
+  assert.equal(proj.summary?.source, "deterministic", "results.md 作为 summary 投影（source=deterministic）");
   assert.equal(proj.summary?.truncated, false);
 });
 
@@ -295,15 +305,18 @@ test("g-374 F2/must-fix②：写入侧净化——actor/title 里的换行与结
   const headerLines = allLines
     .slice(allLines.indexOf("<!-- dsh-graph:results:begin -->") + 1, allLines.indexOf("<!-- dsh-graph:results:end -->"))
     .filter((l) => l.trim() !== "");
+  // F5 起固定字段集合：source_hash（历史指纹 = 缓存键）+ content_hash（正文指纹）；
+  // fallback_reason 仅在「LLM 失败降级」时出现（本用例不是降级路径 ⇒ 不得出现）。
   assert.deepEqual(headerLines.map((l) => l.split(":")[0]), [
     "kind", "generated_at", "goal", "title", "status", "source", "actor",
-    "truncated", "sources", "source_hash", "bytes", "original_bytes",
+    "truncated", "sources", "source_hash", "content_hash", "bytes", "original_bytes",
   ], "机器头字段集合/顺序固定，注入值不得新增字段行");
+  assert.ok(!raw.includes("fallback_reason:"), "非降级路径不得出现 fallback_reason 字段");
   // ③ 回读：注入的伪字段不生效（truncated/bytes 以写入器真实值为准）
   const view = goalResults(root, goal).summary!;
   assert.equal(view.truncated, false, "注入的 truncated: true 不得被解析");
   assert.equal(view.bytes, res.bytes, "注入的 bytes: 1 不得被解析");
-  assert.equal(view.source, "history");
+  assert.equal(view.source, "deterministic");
   assert.ok(view.actor!.includes("evil") && !view.actor!.includes("\n"), "actor 单行化但保留可识别内容");
   assert.equal(view.degraded, null, "写入侧净化后读取不得降级");
 });
@@ -349,8 +362,8 @@ test("g-374 F2：零 LLM 源码契约——F2 代码路径只做文件/事件拼
   const src = readFileSync(join(import.meta.dirname, "../ops.ts"), "utf8");
   const start = src.indexOf("export function goalResultsSummaryFile(");
   assert.ok(start > 0, "必须能定位 F2 实现块（源码契约锚点）");
-  assert.ok(src.slice(start, start + 20000).includes("export function refreshGoalResults("), "锚点必须覆盖到写入器");
   const block = src.slice(start, src.indexOf("\n// ---- g-190", start));
+  assert.ok(block.includes("export function refreshGoalResults("), "锚点必须覆盖到写入器");
   assert.ok(block.length > 1000, "锚点覆盖完整的 F2 实现块");
   for (const forbidden of [/fetch\(/, /startContinuable/, /prepareContinuable/, /\bmodel\b/, /\bsession\b/, /@deepseek-ai/]) {
     assert.doesNotMatch(block, forbidden, `F2 代码不得出现 ${forbidden}（零 LLM / 零会话调用）`);

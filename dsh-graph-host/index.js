@@ -130,6 +130,10 @@ import {
   normalizeSubagentRole,
   toolFilterForRole,
   formatPmPrompt,
+  formatSummaryPrompt,
+  formatAttemptReportSkeleton,
+  goalResultsDigest,
+  renderGoalResultsDigest,
   validateSchema,
   schemaErrorResponse,
   settingsPostSchema,
@@ -141,6 +145,8 @@ import {
   getCachedBoardPayload,
   writeAttemptResults,
   refreshGoalResults,
+  goalResultsSummaryFile,
+  goalResultsCacheState,
   ATTEMPT_RESULTS_MAX_BYTES,
   versionGoals,
   backlogGoals,
@@ -702,7 +708,8 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     promptText(modeStrategySection) ? protectPromptMarkers(modeStrategySection) : "",
     promptText(worktreeBlock) ? protectPromptMarkers(worktreeBlock) : "",
   ].filter(Boolean).join("\n");
-  return [position, current, targetContext ? "## Goal context\n" + protectPromptMarkers(targetContext) : "", override, ...history, discipline, "If a prompt contains a historical handoff and a current brief, execute only the current brief."].filter(Boolean).join("\n\n");
+  // g-374 F6：交回报文骨架 = 注入文本的**尾注**（单一真源 core/ops.ts；剥离本块后其余字节与基线全同）。
+  return [position, current, targetContext ? "## Goal context\n" + protectPromptMarkers(targetContext) : "", override, ...history, discipline, "If a prompt contains a historical handoff and a current brief, execute only the current brief.", formatAttemptReportSkeleton("en")].filter(Boolean).join("\n\n");
 }
 
 /** 统一组装 supervisor 执行 attempt prompt，避免两处派发顺序漂移。 */
@@ -782,7 +789,8 @@ export function formatAttemptPrompt({
   history.push(historicalPromptBlock("## 历史卡片", cards));
   const discipline = formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection });
   const structuredStateInstruction = "【结构化状态字段】每次调用 graph_report_status 除 status 外必须传 state，且只能是 working、blocked、done、error；看板状态判定优先读取该字段，status 文本仅供展示。";
-  return [positioning, current.join("\n"), modeStrategySection, override, ...history, structuredStateInstruction, discipline, ATTEMPT_PROMPT_WARNING]
+  // g-374 F6：交回报文骨架 = 注入文本的**尾注**（单一真源 core/ops.ts；剥离本块后其余字节与基线全同）。
+  return [positioning, current.join("\n"), modeStrategySection, override, ...history, structuredStateInstruction, discipline, ATTEMPT_PROMPT_WARNING, formatAttemptReportSkeleton("zh")]
     .filter((section) => section && section.trim())
     .join("\n\n");
 }
@@ -1165,6 +1173,83 @@ export function apply(ctx, config) {
   // Map miss 的留痕策略见 captureAttemptResults：**纯 stderr**，不写看板事件流
   // （F1 复核注记③：对所有非 attempt 子代理记账 ⇒ 事件流噪声无界增长且不可归因）。
 
+  // ---- g-374 F5：LLM 详情摘要（专用 summarizer 子代理）----
+  // 归因红线：summarizer 是**子代理**，但**绝不**进 childAttemptIndex（它不写 results-att-*.md），
+  // 另外单独索引，用于：① child 结束时判断它是否已落盘 LLM 正文；② 未落盘 ⇒ 降级写 deterministic。
+  const summarizerIndex = new Map();
+  const SUMMARIZER_LABEL_PREFIX = "graph:summarize-results/";
+  const indexSummarizerChild = (childId, entry) => {
+    if (!childId) return;
+    summarizerIndex.delete(childId);
+    summarizerIndex.set(childId, entry);
+    while (summarizerIndex.size > CHILD_ATTEMPT_INDEX_CAP) {
+      const oldest = summarizerIndex.keys().next().value;
+      if (oldest === undefined) break;
+      summarizerIndex.delete(oldest);
+    }
+  };
+
+  // 统一的 summarizer 派发（REST 与工具共用）：材料包零 LLM 生成 → role=summarizer 子代理 → 登记索引。
+  // 模型通道：沿用宿主子代理机制与既有模型路由（resolveModelRoute：executor 覆盖 > project.yaml > 全局），
+  // **不直连 HTTP、不自带凭据**。
+  const startSummarizerChild = async (root, goal, { parent, signal }, opts = {}) => {
+    const goalFile = findGoalFile(root, goal);
+    if (basename(goalFile) !== "goal.md") {
+      return { childId: null, error: `暂存目标（backlog）没有目标目录，无法生成完成摘要：${goal}` };
+    }
+    const ws = opts.workspace ?? dirname(root);
+    const goalRel = relative(ws, goalFile);
+    const digest = renderGoalResultsDigest(goalResultsDigest(goalDetail(root, goal)));
+    const prompt = formatSummaryPrompt({
+      goalId: goal, goalRel, digest,
+      language: resolvePromptLanguage(readGraphSettings().promptLanguage, ctx),
+    });
+    const eff = resolveModelRoute(
+      { provider: opts.provider, model: opts.model, reasoning_effort: opts.reasoning_effort },
+      readExecutorModel(root),
+      readGraphSettings(),
+    );
+    const subagents = ctx.get?.("subagents");
+    if (!subagents || !parent) return { childId: null, error: "subagents 服务不可用或无调用 agent", digest };
+    const provider = (subagents.list?.() ?? []).find((n) => {
+      try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
+    });
+    if (!provider) {
+      return { childId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`, digest };
+    }
+    const toolFilter = toolFilterForRole("summarizer", opts.mode);
+    const request = { parent, prompt: text(prompt), ...(toolFilter ? { toolFilter } : {}) };
+    const agentOptions = {};
+    if (eff.provider) agentOptions.provider = eff.provider;
+    if (eff.model) agentOptions.model = eff.model;
+    if (eff.reasoning_effort) agentOptions.reasoningEffort = eff.reasoning_effort;
+    if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
+    try {
+      const started = await subagents.startContinuable({
+        provider, label: `${SUMMARIZER_LABEL_PREFIX}${goal}`, request, signal,
+      });
+      indexSummarizerChild(started.childId, { root, goal, actor: opts.actor ?? "system:summarizer" });
+      return {
+        childId: started.childId, error: null, digest,
+        model_route: (eff.provider || eff.model) ? `${eff.provider ?? "继承"}/${eff.model ?? "继承"}` : null,
+      };
+    } catch (e) {
+      return { childId: null, error: subagentSpawnErrorText(e), digest };
+    }
+  };
+
+  /** child 结束但没落盘 LLM 正文 ⇒ 降级：写 deterministic + fallback_reason（界面据此提示已回退）。 */
+  const summarizeFallbackWrite = (entry, reason) => {
+    try {
+      const cache = goalResultsCacheState(entry.root, entry.goal);
+      if (cache.cache_hit) return; // 子代理已成功落盘 LLM 版（或另有并发成功）⇒ 不覆盖
+      refreshGoalResults(entry.root, entry.goal, {
+        actor: entry.actor ?? "system:summarizer-fallback",
+        fallbackReason: reason,
+      });
+    } catch { /* 降级失败也不影响结算 */ }
+  };
+
   /**
    * g-374：`subagent/end` 回调——**必须在事件回调侧完成截获与写入**。
    * 实测（card-fe88f5ef §0）：事件在 spawn 后 1.5–4.3s 到达，父轮次先结束不会取消事件但会丢观测窗口
@@ -1173,6 +1258,15 @@ export function apply(ctx, config) {
   const captureAttemptResults = (info) => {
     try {
       const childId = typeof info?.id === "string" && info.id ? info.id : null;
+      // g-374 F5 归因红线：summarizer 子代理**先**在这里被截住——它绝不是 attempt 执行者：
+      // 不写 results-att-*.md、不写 attempt.* 事件、不产生任何看板噪声；只在「没落盘 LLM 正文」时降级。
+      const sumEntry = childId ? summarizerIndex.get(childId) : null;
+      if (sumEntry) {
+        summarizerIndex.delete(childId);
+        const stop = typeof info?.stopReason === "string" ? info.stopReason : "?";
+        summarizeFallbackWrite(sumEntry, `subagent-end: ${stop}`);
+        return;
+      }
       const entry = childId ? childAttemptIndex.get(childId) : null;
       if (!entry) {
         // 宿主重启后冷恢复的 child / 非 executor 派发的 child（收集/spawn/普通子代理）：归属未知
@@ -1891,8 +1985,8 @@ export function apply(ctx, config) {
       // g-374 F2/F3：从目标历史零 LLM 重写 results.md（旧版归档）+ 批量。UI「更新摘要」按钮走同一实现。
       def: {
         name: "graph_refresh_results",
-        description: "从目标历史（评论 / 最近指令 / attempt 与其结果文件 / 事件流）**零 LLM** 重写 <goalDir>/results.md（规范化完成摘要：结论 + 判据达成 + 证据引用 + 关键决策 + 时间线 + 来源）；旧版先归档为 results-archive-YYYYMMDDTHHMMSS.md（保留历史，不删不覆盖），每次调用都重写 + 归档。支持单目标（goal）与批量（goals[]），批量逐目标报告写入/跳过/失败原因，单目标失败不中断整批；目标无评论/无指令/无 attempt 时优雅跳过（不写空文件）。**主管自做 chore/patch 等无子代理改动后应主动调用**。",
-        parameters: params({ goal: str, goals: strArr, actor: str }, []),
+        description: "重写 <goalDir>/results.md（规范化完成摘要）；旧版先归档为 results-archive-YYYYMMDDTHHMMSS.md（保留历史，不删不覆盖），每次调用都重写 + 归档；写入器**自身零 LLM 调用**（LLM 正文由专用 summarizer 子代理产出后经 content 传入）。四种用法：①`llm:true` ⇒ 派发**专用摘要子代理**（role=summarizer）结合目标详情写「具体改了什么 / 影响面 / 值得注意」，落盘后 `source=llm`；以 `source_hash`（历史指纹）为缓存键，历史未变且已有 llm 摘要 ⇒ 直接命中缓存不再调用（`force:true` 强制重来）；子代理不可用/失败 ⇒ 自动降级为机器摘要并标注 `source=deterministic`；②省略 content/llm ⇒ 由目标历史（评论 / 最近指令 / attempt 与其结果文件 / 事件流 + 目标描述要点）**零 LLM 拼装**兜底正文；③传 content ⇒ 采用调用方产出的正文（source=manual：人工手写）；④支持单目标（goal）与批量（goals[]），批量逐目标报告 written/skipped/failed/pending/cached，单目标失败不中断整批。目标无评论/无指令/无 attempt 且无 content 时优雅跳过（不写空文件）。**主管自做 chore/patch 等无子代理改动后应主动调用；要 LLM 详情级摘要时传 llm:true**。",
+        parameters: params({ goal: str, goals: strArr, content: str, source: str, llm: { type: "boolean" }, force: { type: "boolean" }, actor: str }, []),
       },
       run: (a, ex) => {
         const list = [];
@@ -1902,16 +1996,70 @@ export function apply(ctx, config) {
         if (targets.length === 0) throw new GraphError("graph_refresh_results 缺参：需要 goal（单目标）或 goals[]（批量）");
         const r = rootFor(ex);
         const actor = typeof a.actor === "string" && a.actor.trim() ? a.actor.trim() : actorOf(ex);
+        // g-374 F5：按需调用 LLM——只在调用方**显式** llm:true 时派 summarizer 子代理。
+        // 绝不挂在派发/结算/截获路径上自动调用；批量逐目标独立，单目标失败/降级不牵连其它目标。
+        if (a.llm === true) {
+          if (typeof a.content === "string" && a.content.trim()) {
+            throw new GraphError("graph_refresh_results：llm 与 content 不能同时使用（content 已是成品正文，不需要再调 LLM）");
+          }
+          // LLM 分支是唯一的异步路径：返回 Promise（宿主 await）；确定性路径保持同步返回，
+          // 免得既有同步调用方（批量/测试/内部复用）被迫改成 async。
+          return (async () => {
+          const items = [];
+          for (const g of targets) {
+            try {
+              const cache = goalResultsCacheState(r, g);
+              if (cache.cache_hit && a.force !== true) {
+                items.push({
+                  goal: g, ok: true, status: "cached", source: cache.source, cached: true,
+                  file: cache.file, source_hash: cache.source_hash, content_hash: cache.content_hash,
+                });
+                continue;
+              }
+              const spawned = await startSummarizerChild(r, g, { parent: ex?.agent, signal: ex?.signal }, { actor });
+              if (spawned.error) {
+                const fb = refreshGoalResults(r, g, { actor, fallbackReason: `llm-unavailable: ${spawned.error}` });
+                items.push({
+                  goal: g, ok: fb.written, status: fb.written ? "written" : "failed", fallback: true,
+                  source: fb.source, fallback_reason: fb.fallback_reason, child_error: spawned.error,
+                  file: fb.file, archive: fb.archive, reason: fb.reason,
+                });
+                continue;
+              }
+              items.push({
+                goal: g, ok: true, status: "pending", source: "llm", child_id: spawned.childId,
+                model_route: spawned.model_route ?? null, file: goalResultsSummaryFile(findGoalFile(r, g)),
+              });
+            } catch (e) {
+              items.push({ goal: g, ok: false, status: "failed", reason: String(e?.message ?? e) });
+            }
+          }
+          const n = (s) => items.filter((i) => i.status === s).length;
+          return {
+            ok: n("failed") === 0, total: items.length, llm: true,
+            written: n("written"), pending: n("pending"), cached: n("cached"),
+            skipped: n("skipped"), failed: n("failed"),
+            items,
+          };
+          })();
+        }
+        // content：调用方（专用摘要子代理 / 人工）产出的正文；批量时同一份 content 用于所有目标无意义，
+        // 故 content 只允许与单目标 goal 同用（批量必须逐目标各自调用，避免把同一正文写到多个目标）。
+        const content = typeof a.content === "string" && a.content.trim() ? a.content : null;
+        const source = typeof a.source === "string" && a.source.trim() ? a.source.trim() : null;
+        if (content && targets.length > 1) {
+          throw new GraphError("graph_refresh_results：content 只能与单目标 goal 同用（批量摘要请逐目标分别调用，避免同一正文覆盖多个目标）");
+        }
         // 逐目标独立：任一目标失败/跳过都不影响其余目标（批量可审计）。
         const items = targets.map((g) => {
           try {
-            const res = refreshGoalResults(r, g, { actor });
+            const res = refreshGoalResults(r, g, { actor, content, source });
             const reason = String(res.reason ?? "");
             const status = res.written
               ? "written"
               : (/^(error|tx-|write-failed)/.test(reason) ? "failed" : "skipped");
             return {
-              goal: g, ok: res.written, status,
+              goal: g, ok: res.written, status, source: res.source,
               file: res.file, archive: res.archive, reason: res.reason,
               bytes: res.bytes, truncated: res.truncated, source_hash: res.source_hash,
               generated_at: res.generated_at, sources: res.sources,
@@ -2701,20 +2849,68 @@ export function apply(ctx, config) {
         }
       },
     },
-    // g-374 F2/F3：从目标历史零 LLM 重写 results.md（旧版归档）。
-    // 与 `graph_refresh_results` 工具**共用同一个 core 实现**（路径/归档/空态策略唯一真源）；
-    // 仅供 GUI「完成摘要」tab 的「更新摘要」按钮调用，无需用户去命令行或会话下指令。
+    // g-374 F2/F3：重写 results.md（旧版归档）。
+    // 两种来源，共用同一个 core 写入器（路径/归档/空态策略唯一真源），无需用户去命令行或会话下指令：
+    //  ① `llm: true`（推荐，负责人反馈：重新摘要是用户主动触发的，可以用 LLM）⇒ 派发**专用摘要子代理**
+    //     （role=summarizer，流程对齐产品经理润色 goal）去读目标详情并调用写入工具落盘（source=llm）；
+    //     本端点立即返回 `{ok, child_id, pending:true}`，不阻塞、不等待子代理；
+    //  ② 省略 `llm` ⇒ 零 LLM 确定性兜底正文同步写盘（子代理不可用/失败时前端自动回退到这条）。
     {
       path: "/api/dsh-graph/refresh-results",
       handler: async (req, res) => {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal } = body;
+          const { goal, content, source } = body;
           if (!goal || typeof goal !== "string") return json(res, 400, { error: "missing goal" });
-          const result = refreshGoalResults(rootForReq(req, body), goal, { actor: "human:gui" });
+          const rRoot = rootForReq(req, body);
+          if (body.llm === true) {
+            const goalFile = findGoalFile(rRoot, goal);
+            if (basename(goalFile) !== "goal.md") {
+              return json(res, 400, { error: `暂存目标（backlog）没有目标目录，无法生成完成摘要：${goal}` });
+            }
+            // 成本/防抖（F5 第 5 条）：历史未变且现有摘要已是 LLM 版 ⇒ 直接命中缓存，**不再调用 LLM**。
+            const cache = goalResultsCacheState(rRoot, goal);
+            if (cache.cache_hit && body.force !== true) {
+              return json(res, 200, {
+                ok: true, pending: false, cached: true, goal, source: cache.source,
+                file: cache.file, source_hash: cache.source_hash, content_hash: cache.content_hash,
+              });
+            }
+            const { parent, error: parentError } = resolveSpawnParent(rRoot);
+            const ac = new AbortController();
+            req.on("close", () => ac.abort());
+            const spawned = parentError
+              ? { childId: null, error: parentError }
+              : await startSummarizerChild(rRoot, goal, { parent, signal: ac.signal }, {
+                workspace: workspaceOf(req, body) ?? dirname(rRoot),
+                actor: "human:gui",
+              });
+            if (spawned.error) {
+              // 失败降级（F5 第 4 条）：不抛错、不空手而归 ⇒ 立刻写 deterministic 并把原因写进机器头。
+              const fb = refreshGoalResults(rRoot, goal, {
+                actor: "human:gui",
+                fallbackReason: `llm-unavailable: ${spawned.error}`,
+              });
+              return json(res, 200, {
+                ok: fb.written, pending: false, fallback: true, goal, source: fb.source,
+                fallback_reason: fb.fallback_reason, child_error: spawned.error,
+                file: fb.file, archive: fb.archive, reason: fb.reason, ...fb,
+              });
+            }
+            return json(res, 200, {
+              ok: true, pending: true, goal, child_id: spawned.childId,
+              model_route: spawned.model_route ?? null,
+              digest_bytes: Buffer.byteLength(spawned.digest ?? "", "utf8"),
+            });
+          }
+          const result = refreshGoalResults(rRoot, goal, {
+            actor: "human:gui",
+            content: typeof content === "string" ? content : null,
+            source: typeof source === "string" ? source : null,
+          });
           // written=false 不是 HTTP 错误（空态/已跳过都是可预期的业务结果），由前端按 reason 显示。
-          json(res, 200, { ok: result.written, ...result });
+          json(res, 200, { ok: result.written, pending: false, ...result });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });

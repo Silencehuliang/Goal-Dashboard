@@ -23,6 +23,7 @@ import {
   ATTEMPT_RESULTS_SOURCES,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
+import { dirEntries, assertNoNewEntries } from "./_residue-guard.ts";
 
 // g-374 F1：attempt 完成摘要的落盘契约（路径/头字段/事件先行/原子写/截断/占位/开放 source）。
 // 严格对照目标判据 2、3，以及「复核逐字核」的落盘契约。
@@ -37,22 +38,6 @@ const OVERWRITE_NOTE = "本文件由机器生成，下次写入整体覆盖";
  * `<file>.tmp.<pid>`（那条实现服务于另一条写路径）。按名字过滤会随实现改名而空转（恒真）；
  * 按「清单相等」则任何新出现的半文件（无论叫什么）都会红。
  */
-function dirEntries(dir: string): string[] {
-  return readdirSync(dir).sort();
-}
-
-function assertNoNewEntries(dir: string, before: string[], label: string, allowed: string[] = []): void {
-  const after = dirEntries(dir);
-  const added = after.filter((n) => !before.includes(n));
-  const unexpected = added.filter((n) => !allowed.includes(n));
-  assert.deepEqual(
-    unexpected, [],
-    `${label}：除预期目标（${allowed.join("、") || "无"}）外不得出现任何新文件（半文件/临时残留一律算违规）；实际新增：${added.join("、") || "无"}`,
-  );
-  const removed = before.filter((n) => !after.includes(n));
-  assert.deepEqual(removed, [], `${label}：不得删除既有文件；实际删除：${removed.join("、") || "无"}`);
-}
-
 function setup() {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-"));
   const root = join(ws, ".dsh-graph");

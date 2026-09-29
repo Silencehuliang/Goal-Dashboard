@@ -13,6 +13,7 @@ import {
   goalResults,
   goalResultsSummaryFile,
   writeAttemptResults,
+  stripAttemptReportSkeleton,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
@@ -112,14 +113,17 @@ test("g-374 F3/F4：graph_write_results / graph_refresh_results 已注册，参�
   assert.ok(write && refresh, "两个新工具必须注册");
   assert.deepEqual(Object.keys(write.parameters.properties), ["goal", "attempt", "text", "source", "actor"]);
   assert.deepEqual(write.parameters.required, ["goal", "attempt", "text"]);
-  assert.deepEqual(Object.keys(refresh.parameters.properties), ["goal", "goals", "actor"]);
+  // F5 参数面：content/source（成品正文通道）+ llm/force（按需 LLM 摘要 + 强制重写）
+  assert.deepEqual(Object.keys(refresh.parameters.properties), ["goal", "goals", "content", "source", "llm", "force", "actor"]);
   assert.deepEqual(refresh.parameters.required, [], "单目标/批量二选一 ⇒ 均非必填（运行时校验）");
+  assert.equal(refresh.parameters.properties.llm.type, "boolean", "llm 必须是布尔开关（默认不调 LLM）");
+  assert.equal(refresh.parameters.properties.force.type, "boolean", "force 必须是布尔开关（默认吃缓存）");
   assert.equal(write.parameters.additionalProperties, false, "参数白名单（g-190 P0 约定）");
   assert.equal(refresh.parameters.additionalProperties, false);
   // 工具描述必须指路（F3-b：仅注册不告知视为未完成）
   for (const [tool, needles] of [
     [write, ["manual", "零 LLM"]],
-    [refresh, ["零 LLM", "归档"]],
+    [refresh, ["零 LLM", "归档", "summarizer", "llm:true", "deterministic"]],
   ] as const) {
     for (const n of needles) assert.ok(String(tool.description).includes(n), `${tool.name} 描述应包含「${n}」`);
   }
@@ -407,7 +411,13 @@ test("g-374 零 token 自证：新增的提示面不得进入 graph_start_attemp
   assert.ok(prompt.length > 0, "必须捕获到派发 prompt（零 token 对照的锚点）");
   // 新工具的存在只在「告知 agent」的提示面出现；派发给执行子代理的注入文本必须逐字不变 ⇒
   // 本目标不增加任何派发期 token（对照 cf7c66d 的字节同一性由交付证据给出）。
-  assert.ok(!prompt.includes("graph_write_results"), "派发注入文本不得混入新工具（零 token 增量）");
-  assert.ok(!prompt.includes("graph_refresh_results"), "派发注入文本不得混入新工具（零 token 增量）");
-  assert.ok(!prompt.includes("完成摘要"), "派发注入文本不得混入结果面文案");
+  //
+  // F6 判据调整：注入文本尾部现在**必定**带「交回报文骨架」尾注块（单一真源 core/ops.ts），
+  // 该块允许提到 results.md；因此零 token 断言改为「**剥离骨架尾注块后**逐字不变/不含新提示面」。
+  const stripped = stripAttemptReportSkeleton(prompt);
+  assert.equal(stripped.stripped, true, "注入文本必须含报文骨架尾注块（F6）");
+  assert.ok(!stripped.text.includes("graph_write_results"), "剥离骨架后派发注入文本不得混入新工具（零 token 增量）");
+  assert.ok(!stripped.text.includes("graph_refresh_results"), "剥离骨架后派发注入文本不得混入新工具（零 token 增量）");
+  assert.ok(!stripped.text.includes("完成摘要"), "剥离骨架后派发注入文本不得混入结果面文案");
+  assert.ok(!stripped.text.includes("summarizer"), "summarizer 角色提示面不得进入普通派发注入文本");
 });

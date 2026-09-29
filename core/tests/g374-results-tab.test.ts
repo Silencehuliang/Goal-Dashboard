@@ -173,11 +173,18 @@ test("g-374 F3-a：可写性契约——唯一网络请求在点击回调内、P
   assert.ok(head.length > 0, "必须存在 doRefresh 回调");
   assert.doesNotMatch(head, /fetch\(/, "点击之前不得有任何网络请求（组件不得自行轮询）");
   assert.equal((fnBody.match(/fetch\(/g) ?? []).length, 1, "函数体内恰有一处 fetch（即点击回调）");
-  assert.match(fnBody, /const doRefresh = \(\) => \{[\s\S]*\bfetch\(url, \{[\s\S]*?\}\)/, "doRefresh 内发起请求");
+  // F5：唯一出口收敛为 doRefresh 内的 post(payload) 小助手（全部请求都经它，杜绝第二处裸 fetch）。
+  assert.match(fnBody, /const doRefresh = \(\) => \{[\s\S]*const post = \(payload\) => fetch\(graphUrl\("\/api\/dsh-graph\/refresh-results"\), \{[\s\S]*?\}\)/, "doRefresh 内发起请求");
   assert.match(fnBody, /method:\s*"POST"/, "必须是 POST");
   assert.match(fnBody, /graphUrl\("\/api\/dsh-graph\/refresh-results"\)/, "唯一路由：refresh-results");
-  assert.match(fnBody, /JSON\.stringify\(\{ goal: props\.goalId \}\)/, "请求体必须带目标 id");
-  assert.match(fnBody, /if \(!url\) \{ setNote\(\{ kind: "err", text: dgT\("results\.refreshNoWorkspace"\)/, "未知 workspace 时 fail closed");
+  assert.match(fnBody, /body: JSON\.stringify\(payload\)/, "请求体由 payload 统一序列化");
+  // F5 触发时机：点击先请 LLM（llm:true），失败/降级路径才走确定性写入 ⇒ 两条路都带目标 id。
+  assert.match(fnBody, /post\(\{ goal: props\.goalId, llm: true \}\)/, "首选 LLM 详情摘要（llm:true）");
+  assert.match(fnBody, /post\(\{ goal: props\.goalId \}\)/, "降级路径：确定性写入（无 llm 字段）");
+  assert.match(fnBody, /results\.refreshCached/, "缓存命中反馈（历史未变不重复调 LLM）");
+  assert.match(fnBody, /results\.refreshPending/, "等待专用摘要子代理反馈");
+  assert.match(fnBody, /results\.refreshFallbackNote/, "LLM 失败 → 显式提示已回退机器摘要");
+  assert.match(fnBody, /if \(!graphUrl\("\/api\/dsh-graph\/refresh-results"\)\) \{\s*setNote\(\{ kind: "err", text: dgT\("results\.refreshNoWorkspace"\)/, "未知 workspace 时 fail closed");
   // ② 有本地状态 + 可见反馈（进行中/成功/归档名/跳过/失败）
   assert.match(fnBody, /useState\(false\)/, "busy 状态");
   assert.match(fnBody, /useState\(null\)/, "note 状态");
