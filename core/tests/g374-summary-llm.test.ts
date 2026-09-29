@@ -238,6 +238,86 @@ test("g-374 F5 降级：子代理已成功落盘 llm 正文后 child end 不得�
 });
 
 // ============================================================================
+// ④b 竞态（复核 BLOCK-1）：落盘后历史又变化，child 结束时**不得**降级覆盖 LLM 正文
+// ============================================================================
+
+test("g-374 F5 竞态：LLM 正文落盘后历史又变化 ⇒ child 结束不得降级覆盖（无虚假失败提示）", async () => {
+  const h = createHarness();
+  const { goal, goalFile } = prepare(h);
+  appendGoalComment(h.root, goal, "竞态用例：先有历史。", "human:gui");
+  const spawned = await h.call("graph_refresh_results", { goal, llm: true });
+  const childId = spawned.items[0].child_id;
+  assert.ok(childId, "必须先派发成功");
+
+  // child 在结束前把 LLM 正文落盘（真实路径：summarizer 自己调 graph_refresh_results）。
+  const lands = await h.call("graph_refresh_results", {
+    goal, content: "## 结论\nLLM 正文（落盘后历史才变化）。", source: "llm", actor: "agent:summarizer",
+  });
+  assert.equal(lands.items[0].status, "written");
+  const llmBody = readFileSync(goalResultsSummaryFile(goalFile), "utf8");
+  assert.match(llmBody, /^source: llm$/m);
+
+  // 关键：在 child 结束**之前**历史发生变化（一条 attempt 状态回报就足以改变 source_hash）。
+  const att = await dispatch(h, goal, "为竞态用例制造 attempt");
+  h.call("graph_report_status", { goal, attempt: att, status: "竞态用例推进中", state: "working" });
+  assert.equal(goalResultsCacheState(h.root, goal).cache_hit, false,
+    "前置：历史已变 ⇒ cache_hit 必为 false（这正是原实现误判降级的触发条件）");
+
+  // child 结束（summarizer 已成功落盘，只是历史变了）
+  h.emit("subagent/end", {
+    id: childId, local: true, stopReason: "completed",
+    lastAssistantMessage: [{ type: "text", text: "[summary:" + goal + "] file=…" }],
+  });
+
+  const after = readFileSync(goalResultsSummaryFile(goalFile), "utf8");
+  assert.match(after, /^source: llm$/m, "落盘成功后 child 结束不得把来源改回 deterministic");
+  assert.doesNotMatch(after, /^fallback_reason: /m, "LLM 实际成功 ⇒ 机器头不得出现降级原因");
+  assert.ok(!after.includes("LLM 摘要失败"), "不得给出虚假的失败提示");
+  assert.ok(after.includes("LLM 正文（落盘后历史才变化）"), "正文必须仍是 LLM 正文（未被覆盖）");
+  assert.equal(goalResults(h.root, goal).summary!.source, RESULTS_SOURCE_LLM);
+  assert.equal(goalResults(h.root, goal).summary!.fallback_reason, null);
+});
+
+test("g-374 F5 竞态兜底：即使落盘路径没打标记（历史已变 + 当前是本次 spawn 后的 llm 版）也不降级", async () => {
+  const h = createHarness();
+  const { goal, goalFile } = prepare(h);
+  appendGoalComment(h.root, goal, "兜底用例。", "human:gui");
+  const spawned = await h.call("graph_refresh_results", { goal, llm: true });
+  const childId = spawned.items[0].child_id as string;
+  // 绕过工具（因此不会打 landed 标记）：直接经核心写入器落盘 LLM 正文，再让历史变化。
+  refreshGoalResults(h.root, goal, { actor: "agent:summarizer", content: "## 结论\n兜底路径的 LLM 正文。", source: "llm" });
+  appendGoalComment(h.root, goal, "历史在落盘之后又变化。", "human:gui");
+  assert.equal(goalResultsCacheState(h.root, goal).cache_hit, false, "前置：cache_hit=false（走兜底判据）");
+  h.emit("subagent/end", { id: childId, local: true, stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "done" }] });
+  const after = readFileSync(goalResultsSummaryFile(goalFile), "utf8");
+  assert.match(after, /^source: llm$/m, "兜底判据（写盘时间 ≥ spawn 时间）必须挡住降级");
+  assert.ok(after.includes("兜底路径的 LLM 正文"));
+});
+
+test("g-374 F5 竞态负向对照：从未落盘的 child 结束仍必须降级（修了竞态不等于取消降级）", async () => {
+  const h = createHarness();
+  const { goal, goalFile } = prepare(h);
+  appendGoalComment(h.root, goal, "负向对照。", "human:gui");
+  const spawned = await h.call("graph_refresh_results", { goal, llm: true });
+  const childId = spawned.items[0].child_id as string;
+  h.emit("subagent/end", { id: childId, local: true, stopReason: "error", lastAssistantMessage: [] });
+  const after = readFileSync(goalResultsSummaryFile(goalFile), "utf8");
+  assert.match(after, /^source: deterministic$/m, "没落盘就必须降级（否则用户点了没反应）");
+  assert.match(after, /^fallback_reason: subagent-end: error$/m);
+});
+
+test("g-374 F5：REST 面 llm+content 同样互斥（400，且零派发）", async () => {
+  const h = createHarness();
+  const { goal } = prepare(h);
+  const route = h.routes.find((r: any) => r.path === "/api/dsh-graph/refresh-results");
+  const before = h.capturedRequests.length;
+  const res = await restCall(route, { goal, llm: true, content: "## 结论\n成品正文。" });
+  assert.equal(res.code, 400, "REST 必须与工具面同判，不得静默丢弃 content 并照常派发");
+  assert.match(String(res.payload.error), /不能同时使用/);
+  assert.equal(h.capturedRequests.length, before, "拒绝必须发生在派发之前（零副作用）");
+});
+
+// ============================================================================
 // ⑤ 成本/防抖：source_hash 缓存键
 // ============================================================================
 

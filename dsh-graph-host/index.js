@@ -1181,12 +1181,33 @@ export function apply(ctx, config) {
   const indexSummarizerChild = (childId, entry) => {
     if (!childId) return;
     summarizerIndex.delete(childId);
-    summarizerIndex.set(childId, entry);
+    summarizerIndex.set(childId, { landed: false, spawnedAt: new Date().toISOString(), ...entry });
     while (summarizerIndex.size > CHILD_ATTEMPT_INDEX_CAP) {
       const oldest = summarizerIndex.keys().next().value;
       if (oldest === undefined) break;
       summarizerIndex.delete(oldest);
     }
+  };
+
+  /**
+   * g-374 F5（复核 BLOCK-1 返工）：把某目标下**仍待结束**的 summarizer 项标记为「已落盘正文」。
+   *
+   * 反例（复核实测）：summarizer 已成功落盘 LLM 正文，但在它结束前历史发生变化（例如一条
+   * `attempt.status_reported` 就足以改变 `source_hash`）⇒ 用 `cache_hit` 判断「本次是否已落盘」
+   * 会得出 false ⇒ child 结束时用 deterministic **覆盖刚产出的 LLM 正文**，并把 `fallback_reason`
+   * 写成 `subagent-end: completed`，界面显示「LLM 摘要失败」——LLM 实际成功，是虚假失败提示。
+   * 落盘路径都会调用本函数（无竞态：落盘与 child 结束都在事件/工具回调侧，按先后顺序执行）。
+   */
+  const markSummarizerLanded = (goal) => {
+    if (!goal) return 0;
+    let n = 0;
+    for (const entry of summarizerIndex.values()) {
+      if (entry?.goal !== goal || entry.landed === true) continue;
+      entry.landed = true;
+      entry.landedAt = new Date().toISOString();
+      n += 1;
+    }
+    return n;
   };
 
   // 统一的 summarizer 派发（REST 与工具共用）：材料包零 LLM 生成 → role=summarizer 子代理 → 登记索引。
@@ -1241,8 +1262,16 @@ export function apply(ctx, config) {
   /** child 结束但没落盘 LLM 正文 ⇒ 降级：写 deterministic + fallback_reason（界面据此提示已回退）。 */
   const summarizeFallbackWrite = (entry, reason) => {
     try {
+      // ① 精确信号：本次 spawn 对应的 child 已落盘正文（markSummarizerLanded）⇒ 绝不降级。
+      if (entry?.landed === true) return;
       const cache = goalResultsCacheState(entry.root, entry.goal);
-      if (cache.cache_hit) return; // 子代理已成功落盘 LLM 版（或另有并发成功）⇒ 不覆盖
+      if (cache.cache_hit) return; // ② 历史未变且已是 LLM 版（也可能是并发成功）⇒ 不覆盖
+      // ③ 兜底：历史在落盘**之后**又变化 ⇒ cache_hit=false，但当前文件确实是本次 spawn 之后产出的
+      //    LLM 正文（写盘时间不早于 spawn 时间）⇒ 同样视为已落盘，不得覆盖成 deterministic。
+      const spawnedAt = Date.parse(String(entry?.spawnedAt ?? ""));
+      const generatedAt = Date.parse(String(cache.generated_at ?? ""));
+      if (cache.exists && cache.source === "llm" && Number.isFinite(spawnedAt) && Number.isFinite(generatedAt)
+        && generatedAt >= spawnedAt) return;
       refreshGoalResults(entry.root, entry.goal, {
         actor: entry.actor ?? "system:summarizer-fallback",
         fallbackReason: reason,
@@ -2054,6 +2083,8 @@ export function apply(ctx, config) {
         const items = targets.map((g) => {
           try {
             const res = refreshGoalResults(r, g, { actor, content, source });
+            // 外部正文（专用摘要子代理的 LLM 正文 / 人工手写）已落盘 ⇒ 标记，免得该 child 结束时降级覆盖。
+            if (res.written && content) markSummarizerLanded(g);
             const reason = String(res.reason ?? "");
             const status = res.written
               ? "written"
@@ -2863,6 +2894,10 @@ export function apply(ctx, config) {
           const body = await readBody(req);
           const { goal, content, source } = body;
           if (!goal || typeof goal !== "string") return json(res, 400, { error: "missing goal" });
+          // 工具面已拒绝 llm+content（content 已是成品正文）；REST 侧同样判 400，避免静默丢弃 content。
+          if (body.llm === true && typeof content === "string" && content.trim()) {
+            return json(res, 400, { error: "llm 与 content 不能同时使用（content 已是成品正文，不需要再调 LLM）" });
+          }
           const rRoot = rootForReq(req, body);
           if (body.llm === true) {
             const goalFile = findGoalFile(rRoot, goal);
@@ -2909,6 +2944,8 @@ export function apply(ctx, config) {
             content: typeof content === "string" ? content : null,
             source: typeof source === "string" ? source : null,
           });
+          // 外部正文落盘 ⇒ 标记该目标待结束的 summarizer 项，避免其 child 结束时降级覆盖（复核 BLOCK-1）。
+          if (result.written && typeof content === "string" && content.trim()) markSummarizerLanded(goal);
           // written=false 不是 HTTP 错误（空态/已跳过都是可预期的业务结果），由前端按 reason 显示。
           json(res, 200, { ok: result.written, pending: false, ...result });
         } catch (e) {

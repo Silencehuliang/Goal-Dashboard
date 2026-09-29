@@ -4275,7 +4275,13 @@ export function getCardMeta(
 
 /** 报文本体软上限（骨架规范里的自报口径；不参与截断，只为提醒）。 */
 export const ATTEMPT_REPORT_SOFT_MAX_BYTES = 4 * 1024;
-/** 报文本体分预算（字节）；"其余一行" 项不单列。 */
+/**
+ * 报文本体分预算（字节）；"其余一行" 项不单列。
+ *
+ * 分预算合计 4608 B（4.5 KiB）**大于** `ATTEMPT_REPORT_SOFT_MAX_BYTES`（4 KiB）——这是有意的：
+ * 软上限约束的是「典型的完整报文」，各节之间允许此消彼长；真实超限时执行者按骨架要求**自报**即可，
+ * 超限本身不算交付失败（见 `ATTEMPT_REPORT_SKELETON` 第 5 节）。
+ */
 export const ATTEMPT_REPORT_SECTION_BUDGETS: Record<string, number> = {
   changes: 1536,   // 改了什么 ≤1.5 KiB
   how: 1024,       // 怎么改的 ≤1 KiB
@@ -4618,6 +4624,7 @@ export function formatSummaryPrompt(opts: {
     "- `## 证据引用` - attempts, commits/baselines, result files, verification commands.",
     "- `## 关键决策` - decisions and review feedback from comments/directives.",
     "- `## 时间线` - optional, key events only.",
+    "The section headings above are **always the canonical Chinese literals** shown here: they are a machine format contract of `results.md` (identical across deterministic / llm / manual sources and independent of UI language). Do not translate or reword them; write the body text in the goal's language.",
     "",
     "## How to write it to disk (mandatory)",
     `Call \`graph_refresh_results\` with { goal: "${opts.goalId}", content: "<the full body>", actor: "agent:summarizer" }.`,
@@ -4658,6 +4665,8 @@ export function formatSummaryPrompt(opts: {
     `- \`## 证据引用\`：attempt、commit/baseline、结果文件、验证命令；`,
     `- \`## 关键决策\`：评论与最近指令里的决策与评审反馈；`,
     `- \`## 时间线\`：可选，只列关键事件。`,
+    ``,
+    `以上章节标题**恒为中文规范字面量**（\`results.md\` 的格式契约：deterministic / llm / manual 三来源一致，与界面语言无关）；不得翻译或改写标题本身，正文语言与目标 locale 一致。`,
     ``,
     `## 落盘方式（强制）`,
     `正文写好后**必须**调用 \`graph_refresh_results\`：{ goal: "${opts.goalId}", content: "<完整正文>", actor: "agent:summarizer" }。`,
@@ -6459,12 +6468,12 @@ export interface GoalResultsWriteResult {
  */
 export function goalResultsCacheState(root: string, goalId: string): {
   file: string; exists: boolean; source: string | null; source_hash: string | null;
-  content_hash: string | null; fallback_reason: string | null;
+  content_hash: string | null; fallback_reason: string | null; generated_at: string | null;
   history_hash: string | null; cache_hit: boolean; reason: string | null;
 } {
   const empty = (file = "", reason: string | null = null) => ({
     file, exists: false, source: null, source_hash: null, content_hash: null,
-    fallback_reason: null, history_hash: null, cache_hit: false, reason,
+    fallback_reason: null, generated_at: null, history_hash: null, cache_hit: false, reason,
   });
   try {
     if (!root || typeof goalId !== "string" || !goalId.trim()) return empty("", "invalid-goal");
@@ -6479,7 +6488,7 @@ export function goalResultsCacheState(root: string, goalId: string): {
     return {
       file, exists: true, source: view.source, source_hash: view.source_hash,
       content_hash: view.content_hash, fallback_reason: view.fallback_reason,
-      history_hash: historyHash,
+      generated_at: view.generated_at, history_hash: historyHash,
       cache_hit: view.source === RESULTS_SOURCE_LLM && view.source_hash === historyHash,
       reason: null,
     };
