@@ -590,10 +590,51 @@
           : attempts.map(row)));
     }
 
+    // g-374 F1：完成摘要只读 tab —— 先 results.md（F2 规范化摘要，若存在），再按 attempt 倒序列出
+    // results-att-*.md。只读、零新增网络请求（数据来自 /api/dsh-graph/goal 的 detail.results）。
+    // 文件缺失/损坏/超大一律以可见文案降级（沿用 g-275 渲染期解引用保护：全程可选链，不抛错）。
+    function AttemptResults(props) {
+      const results = props.results ?? {};
+      const summary = results.summary ?? null;
+      const attempts = Array.isArray(results.attempts) ? results.attempts : [];
+      const metaLine = (r) => {
+        const parts = [];
+        if (r?.generated_at) parts.push(`${dgT("results.generatedAt")} ${r.generated_at}`);
+        if (r?.source) parts.push(`source: ${r.source}`);
+        if (r?.stop_reason) parts.push(`stop_reason: ${r.stop_reason}`);
+        return parts.join(" ｜ ");
+      };
+      const badges = (r) => [
+        r?.truncated ? h("span", { key: "trunc", style: { ...S.meta, fontSize: 11 } }, dgT("results.truncatedBadge")) : null,
+        r?.placeholder ? h("span", { key: "ph", style: { ...S.meta, fontSize: 11 } }, dgT("results.placeholderBadge")) : null,
+        r?.degraded ? h("span", { key: "deg", style: { ...S.meta, fontSize: 11 } }, `${dgT("results.degradedBadge")} (${r.degraded})`) : null,
+      ].filter(Boolean);
+      const block = (key, title, r) => h("div", { key, style: { ...S.subCard, marginTop: 4 } },
+        h("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 } },
+          h("span", { style: { fontSize: 12, fontWeight: 700 } }, title),
+          ...badges(r)),
+        h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } }, metaLine(r)),
+        r?.body
+          ? h(GoalMarkdown, { text: r.body })
+          : h("div", { style: { ...S.meta, fontSize: 12, marginTop: 2 } }, dgT("results.emptyBody")));
+      const sections = [];
+      if (summary) sections.push(block("summary", dgT("results.summaryTitle"), summary));
+      for (let i = 0; i < attempts.length; i++) {
+        const r = attempts[i];
+        sections.push(block(`att-${r?.attempt ?? i}`, `${dgT("results.attemptTitle")} ${r?.attempt ?? "?"}`, r));
+      }
+      return h("div", { key: "results", style: S.modalSection },
+        h("div", { style: S.modalH }, dgT("results.title")),
+        sections.length
+          ? h("div", null, ...sections)
+          : h("div", { style: { ...S.meta, fontSize: 12, marginTop: 4 } }, dgT("results.noResults")),
+        h("div", { style: { ...S.meta, fontSize: 11, marginTop: 6, opacity: 0.75 } }, dgT("results.readOnlyNote")));
+    }
+
     function GoalModal(props) {
       useLocaleRevision();
       const [state, setState] = React.useState({ loading: true });
-      const [tab, setTab] = React.useState("detail"); // "detail" | "worktree" | "context" | "activity"
+      const [tab, setTab] = React.useState("detail"); // "detail" | "worktree" | "results" | "context" | "activity"
       const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
       const [logFilter, setLogFilter] = React.useState(""); // "" 全部 / 事件名
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新执行的模型路由（显示兜底）
@@ -900,6 +941,10 @@
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
         ];
+        // g-374 F1：只读「完成摘要」tab（results.md + results-att-*.md，attempt 倒序）。
+        const resultsTab = [
+          h(AttemptResults, { key: "results", results: d.results }),
+        ];
         const activityTab = (() => {
           const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));
           if (!meaningful.length) {
@@ -987,6 +1032,19 @@
               style: {
                 fontSize: 12, padding: "5px 14px", cursor: "pointer",
                 marginBottom: -1, borderRadius: "6px 6px 0 0",
+                border: "1px solid " + (tab === "results" ? "rgba(128,128,128,.35)" : "transparent"),
+                borderBottom: "none",
+                background: tab === "results" ? "rgba(128,128,128,.10)" : "transparent",
+                fontWeight: tab === "results" ? 700 : 400,
+                color: tab === "results" ? "var(--dsw-alias-label-primary, #8ab4ff)" : "inherit",
+                opacity: tab === "results" ? 1 : 0.7,
+              },
+              onClick: () => setTab("results"),
+            }, dgT("tab.results")),
+            h("button", {
+              style: {
+                fontSize: 12, padding: "5px 14px", cursor: "pointer",
+                marginBottom: -1, borderRadius: "6px 6px 0 0",
                 border: "1px solid " + (tab === "activity" ? "rgba(128,128,128,.35)" : "transparent"),
                 borderBottom: "none",
                 background: tab === "activity" ? "rgba(128,128,128,.10)" : "transparent",
@@ -1041,7 +1099,7 @@
             style: { border: "1px solid rgba(128,128,128,.35)", borderTop: "none",
                      borderRadius: "0 6px 6px 6px", padding: "10px 12px",
                      background: "rgba(128,128,128,.06)" },
-          }, tab === "detail" ? detailTab : tab === "worktree" ? worktreeTab : tab === "context" ? contextTab : activityTab),
+          }, tab === "detail" ? detailTab : tab === "worktree" ? worktreeTab : tab === "results" ? resultsTab : tab === "context" ? contextTab : activityTab),
         ];
       }
 

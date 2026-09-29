@@ -139,6 +139,8 @@ import {
   abandonAttemptPostSchema,
   abandonAttempt,
   getCachedBoardPayload,
+  writeAttemptResults,
+  ATTEMPT_RESULTS_MAX_BYTES,
   versionGoals,
   backlogGoals,
   matchIfNoneMatch,
@@ -146,7 +148,7 @@ import {
   closeWatchers,
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
-import { readEvents } from "./core/events.js";
+import { readEvents, appendEvent } from "./core/events.js";
 import { sT } from "./lib/server-i18n.js";
 // g-133：接入 DSH profile 级用户设置（dsh-settings）。为避免在 @deepseek-ai/* 不可解析的上下文
 // （工作树 link、仅 headless、无 settings 供应商的组合）导致整个插件加载失败、拖垮 GUI，
@@ -1140,6 +1142,95 @@ export function apply(ctx, config) {
   };
   // g-369：owner 判定的唯一输入——目标创建者（meta.created_by）。只读；目标不存在时由 findGoalFile 抛错。
   const goalCreatedBy = (root, goalId) => loadGoal(findGoalFile(root, goalId)).meta.created_by;
+
+  // ---- g-374 F1：attempt 完成摘要的零 token 截获（宿主生命周期事件，非 LLM / 非轮询 / 非 fs watcher）----
+  // 数据源唯一正解：`ctx.on("subagent/end", info)` 的 `info.lastAssistantMessage`（ContentBlock[]，
+  // 宿主已折好的「最后一条非空 assistant 消息」，纯函数选择规则，零 LLM）。`info.id` = durable childId
+  // = attempt.md 的 meta.child_id ⇒ 用下面这个内存 Map 精确归因（**Map miss 绝不瞎猜归属**）。
+  // 只在 executor 派发点登记；collect / spawn 派发点不登记（它们不是 attempt）。
+  const childAttemptIndex = new Map();
+  const CHILD_ATTEMPT_INDEX_CAP = 512;
+  const indexChildAttempt = (childId, entry) => {
+    if (!childId) return;
+    // 重绑/重发指令 → 同一 childId 只保留最新归属；LRU 上界防长跑进程映射无界增长。
+    childAttemptIndex.delete(childId);
+    childAttemptIndex.set(childId, entry);
+    while (childAttemptIndex.size > CHILD_ATTEMPT_INDEX_CAP) {
+      const oldest = childAttemptIndex.keys().next().value;
+      if (oldest === undefined) break;
+      childAttemptIndex.delete(oldest);
+    }
+  };
+  // Map miss 时的留痕看板根（插件自身 workspace 的 canonical root；解析不出时仅 stderr 留痕，绝不猜 attempt）。
+  const resultsFallbackRoot = (() => {
+    try {
+      const ws = ctx.get?.("sandboxPolicy")?.workspaceRoot;
+      return ws ? resolveCanonicalRoot(config, ws).root : null;
+    } catch { return null; }
+  })();
+
+  /**
+   * g-374：`subagent/end` 回调——**必须在事件回调侧完成截获与写入**。
+   * 实测（card-fe88f5ef §0）：事件在 spawn 后 1.5–4.3s 到达，父轮次先结束不会取消事件但会丢观测窗口
+   * ⇒ 任何依赖父轮次存活的写入都会静默丢结果。本回调整体 try/catch：**绝不影响子代理结算**。
+   */
+  const captureAttemptResults = (info) => {
+    try {
+      const childId = typeof info?.id === "string" && info.id ? info.id : null;
+      const entry = childId ? childAttemptIndex.get(childId) : null;
+      if (!entry) {
+        // 宿主重启后冷恢复的 child / 非 executor 派发的 child：归属未知 ⇒ 不写文件、不猜归属。
+        try { console.warn(`[dsh-graph] g-374 subagent/end 未登记 child=${childId ?? "(none)"} —— 跳过完成摘要（不猜归属）`); } catch { /* 忽略 */ }
+        if (childId && resultsFallbackRoot) {
+          try {
+            appendEvent(resultsFallbackRoot, {
+              actor: "system:subagent/end",
+              event: "attempt.results_skipped",
+              details: {
+                child_id: childId, reason: "unmapped", source: "subagent/end", unmapped: true,
+                stop_reason: typeof info?.stopReason === "string" ? info.stopReason : null,
+              },
+            });
+          } catch { /* 忽略 */ }
+        }
+        return;
+      }
+      if (info?.local === false) return; // 本项目只用 continuable 子代理（local 恒 true）
+      // 特性探测：payload 既无 lastAssistantMessage 也无 stopReason ⇒ 宿主未提供该 event 的 g-374 载荷，
+      // 静默降级（不写文件、不抛错）。有 stopReason 但缺文本 ⇒ 是「子代理无输出」占位（可区分）。
+      const hasField = Object.prototype.hasOwnProperty.call(info ?? {}, "lastAssistantMessage");
+      const stopReason = typeof info?.stopReason === "string" && info.stopReason ? info.stopReason : null;
+      if (!hasField && stopReason === null) return;
+      const blocks = Array.isArray(info?.lastAssistantMessage) ? info.lastAssistantMessage : null;
+      const text = blocks
+        ? blocks.filter((b) => b && b.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n")
+        : "";
+      writeAttemptResults(entry.root, {
+        goal: entry.goal,
+        attempt: entry.attempt,
+        source: "subagent/end",
+        childId,
+        stopReason,
+        text,
+        actor: entry.actor ?? "system:subagent/end",
+      });
+    } catch (e) {
+      try { console.warn("[dsh-graph] g-374 完成摘要截获失败（已忽略，不影响结算）:", e?.message ?? e); } catch { /* 忽略 */ }
+    }
+  };
+
+  /** g-374：child_error 分支占位（无子代理 ⇒ 永远不会有 subagent/end 事件，必须在派发处补齐）。 */
+  const writeChildErrorResults = (rootForWrite, goalId, attemptId, actor, note) => {
+    try {
+      writeAttemptResults(rootForWrite, {
+        goal: goalId, attempt: attemptId, source: "child_error", childId: null,
+        stopReason: null, text: null,
+        reason: note ? `child-error: ${note}` : "child-error: subagents 服务不可用或无调用 agent",
+        actor: actor || "system:dispatch",
+      });
+    } catch { /* 绝不打断派发 */ }
+  };
+
   // g-190：子代理活跃度探测（live registry 权威）。
   // 返回 "running"（正运行）/ "idle"（已加载未运行）/ "gone"（不在 live registry）/ "unknown"（registry 不可用）。
   const childLiveState = (childId) => {
@@ -1398,6 +1489,8 @@ export function apply(ctx, config) {
 
     // 9. 启动与绑定子代理
     if (providerError) {
+      // g-374 F1：child_error 占位（无 provider ⇒ 无子代理 ⇒ 永不产生 subagent/end）。
+      writeChildErrorResults(root, goal, attempt, actor, `无可用 provider：${providerError}`);
       return {
         ok: true,
         attempt,
@@ -1471,6 +1564,9 @@ export function apply(ctx, config) {
           );
         }
 
+        // g-374 F1：登记归因（childId → attempt）——只在此 executor 派发点登记。
+        indexChildAttempt(started.childId, { root, goal, attempt, actor });
+
         return {
           ok: true,
           attempt,
@@ -1487,6 +1583,8 @@ export function apply(ctx, config) {
           prompt,
         };
       } catch (e) {
+        // g-374 F1：child_error 占位（含 g-237 绑定失败收敛路径）。
+        writeChildErrorResults(root, goal, attempt, actor, `subagent 派发失败：${e?.message ?? e}`);
         return {
           ok: true,
           attempt,
@@ -1506,6 +1604,8 @@ export function apply(ctx, config) {
         };
       }
     } else {
+      // g-374 F1：subagents 服务不可用 / 无调用 agent（此分支 child_error 恒 null，最易漏）。
+      writeChildErrorResults(root, goal, attempt, actor, "subagents 服务不可用或无调用 agent");
       return {
         ok: true,
         attempt,
@@ -3770,6 +3870,16 @@ export function apply(ctx, config) {
         execute: (args, exec) => t.run(args, exec),
       }),
     );
+
+    // g-374 F1：注册完成摘要截获（宿主生命周期事件；O(1) 回调，非轮询 / 非 fs watcher）。
+    // 特性探测：宿主无 ctx.on（不支持该事件面的旧宿主）⇒ **不注册、静默降级**（不写文件、不抛错、
+    // 不影响 attempt 生命周期与既有功能）。engines 下界维持 >=0.1.5-rc.2，**不得抬高**。
+    if (typeof ctx?.on === "function") {
+      try {
+        const off = ctx.on("subagent/end", captureAttemptResults);
+        if (typeof off === "function") disposers.push(off);
+      } catch { /* 事件名不被宿主支持 ⇒ 静默（特性探测） */ }
+    }
 
     // g-118：supervisor 守则自动注入（不依赖显式 skill 调用）——
     // g-118（负责人 2026-08-22 设计转向）：在所有会话注入**简短引导提示词**（非完整守则）。

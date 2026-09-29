@@ -5007,6 +5007,349 @@ export function bindAttemptChild(
 }
 
 
+// ---- g-374 F1：attempt 完成摘要（零 token 截获落盘 + goalDetail 只读投影） ----
+
+/** g-374：单份 attempt 完成摘要的默认字节上限（UTF-8）。超限截断，并在文件头与事件双标注。 */
+export const ATTEMPT_RESULTS_MAX_BYTES = 64 * 1024;
+
+/** g-374：读取侧单文件上限（防手工塞入超大文件拖垮 GUI）；超限截断读取并标注 degraded。 */
+export const ATTEMPT_RESULTS_READ_MAX_BYTES = 1024 * 1024;
+
+/**
+ * g-374：结果文件 `source` 字段的**已知取值**——**开放集合**，不是白名单。
+ * 已内置：`subagent/end`（F1 自动截获）/ `child_error` / `abandon` / `detach` 三类占位 /
+ * `manual`（人工或主管写入，同一格式、同一路径约定、同一覆盖策略；由后续 F3 工具复用本写入器）。
+ * 写入器**不做取值校验**：未知取值原样落盘，格式保持不变；新增来源无需改动本文件。
+ */
+export const ATTEMPT_RESULTS_SOURCES = ["subagent/end", "child_error", "abandon", "detach", "manual"] as const;
+/** `(string & {})` 保留已知取值的自动补全，同时允许任意扩展取值（开放集合）。 */
+export type AttemptResultsSource = (typeof ATTEMPT_RESULTS_SOURCES)[number] | (string & {});
+
+/** g-374：结果文件头分隔（字段名写死：generated_at/goal/attempt/child_id/source/stop_reason/truncated）。 */
+const RESULTS_HEADER_BEGIN = "<!-- dsh-graph:results:begin -->";
+const RESULTS_HEADER_END = "<!-- dsh-graph:results:end -->";
+/** g-374：覆盖式说明（唯一文案源；文件头之后与交付说明必须逐字一致）。 */
+const RESULTS_OVERWRITE_NOTE = "本文件由机器生成，下次写入整体覆盖";
+
+/** 占位正文里的来源解释——让三类占位在**文件内**也能被区分（不必依赖事件流）。 */
+const RESULTS_SOURCE_EXPLAIN: Record<string, string> = {
+  "child_error": "子代理未启动（attempt 仅本地创建）——没有任何子代理输出可截获。",
+  "subagent/end": "子代理已结束，但没有可用的最后一条 assistant 文本（payload 字段缺失，或输出在 teardown 中丢失）。",
+  "abandon": "该 attempt 已被放弃（abandon）——本文件是占位，不是子代理输出。",
+  "detach": "该 attempt 已被解绑/取代（detach / superseded）——本文件是占位，不是子代理输出。",
+  "manual": "该文件由人工/主管写入（manual）——不是子代理输出。",
+};
+
+export interface AttemptResultsHeader {
+  generated_at: string;
+  goal: string;
+  attempt: string;
+  child_id: string | null;
+  source: string;
+  stop_reason: string | null;
+  truncated: boolean;
+  placeholder: boolean;
+  reason: string | null;
+  bytes: number;
+  original_bytes: number;
+}
+
+export interface WriteAttemptResultsOptions {
+  goal: string;
+  attempt: string;
+  source: AttemptResultsSource;
+  /** 子代理 childId（= attempt.md 的 meta.child_id）；无子代理（child_error）时为 null。 */
+  childId?: string | null;
+  /** 子代理终止原因（completed/aborted/error/max-tokens/refusal）；未知为 null。 */
+  stopReason?: string | null;
+  /** 最后一条 assistant 消息的 text 块拼接；空/缺失 ⇒ 写占位（绝不写空文件）。 */
+  text?: string | null;
+  /** 显式占位/降级原因；缺省由 text/stopReason 推导（no-output / stop-<reason>）。 */
+  reason?: string | null;
+  actor?: string;
+  maxBytes?: number;
+  /** true 时若结果文件已存在则保留原文件（仅记事件）——用于不覆盖已截获的真实输出。 */
+  keepExisting?: boolean;
+}
+
+export interface AttemptResultsWriteResult {
+  written: boolean;
+  skipped: boolean;
+  file: string;
+  bytes: number;
+  original_bytes: number;
+  truncated: boolean;
+  placeholder: boolean;
+  reason: string | null;
+  generated_at: string;
+}
+
+/** UTF-8 字节级截断：按字节切且不切坏多字节字符（剔除截断处产生的 U+FFFD 残尾）。 */
+function truncateUtf8Bytes(text: string, maxBytes: number): { text: string; truncated: boolean; bytes: number; original_bytes: number } {
+  const original = Buffer.byteLength(text, "utf8");
+  if (original <= maxBytes) return { text, truncated: false, bytes: original, original_bytes: original };
+  let kept = Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8");
+  while (kept.length > 0 && (kept.endsWith("\uFFFD") || Buffer.byteLength(kept, "utf8") > maxBytes)) {
+    kept = kept.slice(0, -1);
+  }
+  return { text: kept, truncated: true, bytes: Buffer.byteLength(kept, "utf8"), original_bytes: original };
+}
+
+/** g-374：结果文件路径（写死契约：<goalDir>/results-<attempt>.md，与 attempt id 一一对应）。 */
+export function attemptResultsFile(goalFile: string, attempt: string): string {
+  return join(goalDirOf(goalFile), `results-${attempt}.md`);
+}
+
+/** g-374：占位正文（有语义、可区分、非空）。 */
+function attemptResultsPlaceholderBody(source: string, reason: string | null, stopReason: string | null): string {
+  return [
+    `> ⚠️ **占位：本次 attempt 没有可截获的子代理输出。**`,
+    `>`,
+    `> ${RESULTS_SOURCE_EXPLAIN[source] ?? "无可截获的子代理输出。"}`,
+    `>`,
+    `> - source: \`${source}\``,
+    `> - reason: \`${reason ?? "unknown"}\``,
+    `> - stop_reason: \`${stopReason ?? "null"}\``,
+  ].join("\n");
+}
+
+/** g-374：结果文件全文（机器头 + 覆盖说明 + 摘要正文）。 */
+function renderAttemptResultsFile(h: AttemptResultsHeader, body: string, warnLine: string | null): string {
+  const head = [
+    RESULTS_HEADER_BEGIN,
+    `generated_at: ${h.generated_at}`,
+    `goal: ${h.goal}`,
+    `attempt: ${h.attempt}`,
+    `child_id: ${h.child_id ?? "null"}`,
+    `source: ${h.source}`,
+    `stop_reason: ${h.stop_reason ?? "null"}`,
+    `truncated: ${h.truncated ? "true" : "false"}`,
+    `placeholder: ${h.placeholder ? "true" : "false"}`,
+    `reason: ${h.reason ?? "null"}`,
+    `bytes: ${h.bytes}`,
+    `original_bytes: ${h.original_bytes}`,
+    RESULTS_HEADER_END,
+  ];
+  const notes = [`> ⚠️ ${RESULTS_OVERWRITE_NOTE}（手工编辑会被覆盖）。`];
+  if (h.truncated) notes.push(`> ✂️ 已截断：原始 ${h.original_bytes} 字节，仅保留前 ${h.bytes} 字节。`);
+  if (h.placeholder) notes.push(`> 🧩 占位：source=\`${h.source}\`，reason=\`${h.reason ?? "null"}\`。`);
+  if (warnLine) notes.push(warnLine);
+  return `${head.join("\n")}\n\n${notes.join("\n")}\n\n## ${h.attempt} 完成摘要\n\n${body}\n`;
+}
+
+/**
+ * g-374 F1：把一次 attempt 的完成摘要落盘（零 token —— 文本来自宿主 subagent/end 事件，非 LLM 调用）。
+ *
+ * 契约（写死，勿改）：
+ * - 路径 `<goalDir>/results-<attempt>.md`；同一 attempt 多次写入 **last-wins 覆盖同一文件**，每次都追加事件；
+ * - 顺序：事件先行（`attempt.results_written`）→ 原子写（temp + fsync + rename，绝不留半文件）；
+ * - 截断：默认 64 KiB（按 UTF-8 字节，不切坏多字节字符），文件头 `truncated: true` + 事件双标注；
+ * - 占位：无文本 ⇒ 写有语义的占位（禁空文件、禁静默跳过、禁抛错打断 attempt 生命周期）；
+ * - 本函数**永不抛出**：任何失败都返回 `{written:false, skipped:true, reason}` 并尽力留痕。
+ */
+export function writeAttemptResults(root: string, opts: WriteAttemptResultsOptions): AttemptResultsWriteResult {
+  const fail = (reason: string, file = ""): AttemptResultsWriteResult => ({
+    written: false, skipped: true, file, bytes: 0, original_bytes: 0,
+    truncated: false, placeholder: false, reason, generated_at: "",
+  });
+  try {
+    const goalId = String(opts?.goal ?? "").trim();
+    const attempt = String(opts?.attempt ?? "").trim();
+    if (!root) return fail("no-root");
+    if (!goalId) return fail("invalid-goal");
+    if (!attempt || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(attempt)) return fail("invalid-attempt");
+    // source 为**开放取值**：未知来源原样落盘（新增来源无需改本文件）；缺失/空 ⇒ 默认 subagent/end。
+    const source: AttemptResultsSource = typeof opts?.source === "string" && opts.source.trim()
+      ? opts.source.trim()
+      : "subagent/end";
+    const goalFile = findGoalFile(root, goalId);
+    if (basename(goalFile) !== "goal.md") return fail("backlog-goal-no-dir");
+    const file = attemptResultsFile(goalFile, attempt);
+    const actor = typeof opts.actor === "string" && opts.actor.trim() ? opts.actor.trim() : "system:results";
+    const maxBytes = Number.isFinite(Number(opts.maxBytes)) && Number(opts.maxBytes) > 0
+      ? Math.floor(Number(opts.maxBytes))
+      : ATTEMPT_RESULTS_MAX_BYTES;
+    const childId = typeof opts.childId === "string" && opts.childId.trim() ? opts.childId.trim() : null;
+    const stopReason = typeof opts.stopReason === "string" && opts.stopReason.trim() ? opts.stopReason.trim() : null;
+    // 默认不做内容过滤；仅 CRLF → LF 归一化（跨平台一致的可读性）。
+    const rawText = typeof opts.text === "string" ? opts.text.replace(/\r\n/g, "\n") : "";
+    const hasText = rawText.trim().length > 0;
+    const abnormal = stopReason !== null && stopReason !== "completed";
+    const placeholder = !hasText;
+    const explicitReason = typeof opts.reason === "string" && opts.reason.trim() ? opts.reason.trim() : null;
+    const reason = explicitReason ?? (placeholder ? (abnormal ? `stop-${stopReason}` : "no-output") : null);
+    const cut = truncateUtf8Bytes(
+      hasText ? rawText : attemptResultsPlaceholderBody(source, reason, stopReason),
+      maxBytes,
+    );
+    const generatedAt = nowIsoMs();
+    const header: AttemptResultsHeader = {
+      generated_at: generatedAt, goal: goalId, attempt, child_id: childId, source,
+      stop_reason: stopReason, truncated: cut.truncated, placeholder, reason,
+      bytes: cut.bytes, original_bytes: cut.original_bytes,
+    };
+    const content = renderAttemptResultsFile(
+      header, cut.text,
+      abnormal && hasText
+        ? `> ⚠️ 子代理终止异常（stop_reason: \`${stopReason}\`）：以下为截获到的部分输出。`
+        : null,
+    );
+    const keepExisting = opts.keepExisting === true;
+
+    // 锁内判定覆盖/保留（last-wins 是默认；keepExisting 仅用于不覆盖已截获的真实输出）。
+    const tx = withTx(
+      { root, actor, goal: goalId },
+      { lockName: "results-" + goalId },
+      () => {
+        if (keepExisting && existsSync(file)) {
+          return {
+            value: { keptExisting: true },
+            events: [{
+              actor, event: "attempt.results_skipped", goal: goalId,
+              details: {
+                attempt, child_id: childId, source, stop_reason: stopReason,
+                reason: "existing-results-kept", file, generated_at: generatedAt,
+              },
+            }],
+          };
+        }
+        return {
+          value: { keptExisting: false },
+          events: [{
+            actor, event: "attempt.results_written", goal: goalId,
+            details: {
+              attempt, child_id: childId, source, stop_reason: stopReason, reason, file,
+              bytes: cut.bytes, original_bytes: cut.original_bytes,
+              truncated: cut.truncated, placeholder, overwrite: existsSync(file),
+              generated_at: generatedAt,
+            },
+          }],
+        };
+      },
+    );
+    if (!tx.ok) return fail(`tx-${tx.phase}: ${tx.error}`, file);
+    if (tx.value.keptExisting) {
+      return { ...fail("existing-results-kept", file), generated_at: generatedAt };
+    }
+    // 事件已先行；写失败只补记失败事件，绝不抛出（不得打断 attempt 生命周期）。
+    try {
+      atomicWrite(file, content);
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      try {
+        appendEvent(root, {
+          actor, event: "attempt.results_skipped", goal: goalId,
+          details: { attempt, child_id: childId, source, reason: "write-failed: " + msg, file },
+        });
+      } catch { /* 忽略 */ }
+      return fail("write-failed: " + msg, file);
+    }
+    return {
+      written: true, skipped: false, file,
+      bytes: cut.bytes, original_bytes: cut.original_bytes,
+      truncated: cut.truncated, placeholder, reason, generated_at: generatedAt,
+    };
+  } catch (e) {
+    return fail("error: " + String((e as Error)?.message ?? e));
+  }
+}
+
+export interface AttemptResultsView {
+  file: string;
+  attempt: string | null;
+  generated_at: string | null;
+  child_id: string | null;
+  source: string | null;
+  stop_reason: string | null;
+  truncated: boolean;
+  placeholder: boolean;
+  reason: string | null;
+  bytes: number;
+  /** 文件全文（含机器头）。 */
+  text: string;
+  /** 头之后的可读正文（覆盖说明 + 摘要）。 */
+  body: string;
+  /** 非 null ⇒ 读取期降级（oversized / unparsable-header / read-failed）。 */
+  degraded: string | null;
+}
+
+/** 只读解析一份结果文件；缺失/损坏/超大一律不抛错，以 degraded 标注降级。 */
+function readAttemptResultsFile(file: string, attempt: string | null): AttemptResultsView | null {
+  try {
+    if (!existsSync(file)) return null;
+    if (!statSync(file).isFile()) return null;
+    const size = statSync(file).size;
+    const oversized = size > ATTEMPT_RESULTS_READ_MAX_BYTES;
+    const raw = oversized
+      ? readFileSync(file).subarray(0, ATTEMPT_RESULTS_READ_MAX_BYTES).toString("utf8")
+      : readFileSync(file, "utf8");
+    const view: AttemptResultsView = {
+      file, attempt, generated_at: null, child_id: null, source: null, stop_reason: null,
+      truncated: false, placeholder: false, reason: null,
+      bytes: Buffer.byteLength(raw, "utf8"), text: raw, body: raw,
+      degraded: oversized ? "oversized" : null,
+    };
+    const begin = raw.indexOf(RESULTS_HEADER_BEGIN);
+    const end = begin === -1 ? -1 : raw.indexOf(RESULTS_HEADER_END, begin);
+    if (begin === -1 || end === -1) {
+      view.degraded = view.degraded ?? "unparsable-header";
+      return view;
+    }
+    for (const line of raw.slice(begin + RESULTS_HEADER_BEGIN.length, end).split("\n")) {
+      const m = /^([a-z_]+):\s*(.*)$/.exec(line.trim());
+      if (!m) continue;
+      const val = m[2] === "null" ? null : m[2];
+      switch (m[1]) {
+        case "generated_at": view.generated_at = val; break;
+        case "attempt": view.attempt = val ?? attempt; break;
+        case "child_id": view.child_id = val; break;
+        case "source": view.source = val; break;
+        case "stop_reason": view.stop_reason = val; break;
+        case "truncated": view.truncated = val === "true"; break;
+        case "placeholder": view.placeholder = val === "true"; break;
+        case "reason": view.reason = val; break;
+        case "bytes": view.bytes = Number(val) || view.bytes; break;
+        default: break;
+      }
+    }
+    view.body = raw.slice(end + RESULTS_HEADER_END.length).replace(/^\s*\n/, "");
+    if (!view.attempt && attempt) view.attempt = attempt;
+    return view;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * g-374：目标目录下的完成摘要只读投影。
+ * - `summary` = `<goalDir>/results.md`（F2 的规范化摘要；不存在 ⇒ null）；
+ * - `attempts` = `<goalDir>/results-att-*.md`，按 attempt id 倒序；
+ * - 全程 try/catch + 逐文件降级：缺失/损坏/超大都不抛错（供 goalDetail 直接内联）。
+ */
+export function goalResults(root: string, goalId: string): { summary: AttemptResultsView | null; attempts: AttemptResultsView[] } {
+  const empty = { summary: null as AttemptResultsView | null, attempts: [] as AttemptResultsView[] };
+  try {
+    if (!root || !goalId) return empty;
+    const file = findGoalFile(root, goalId);
+    if (basename(file) !== "goal.md") return empty;
+    const dir = dirname(file);
+    if (!existsSync(dir)) return empty;
+    const summary = readAttemptResultsFile(join(dir, "results.md"), null);
+    const attempts: AttemptResultsView[] = [];
+    for (const name of readdirSync(dir)) {
+      // F2 的历史归档（results-archive-*.md）不是 attempt 结果文件，明确排除。
+      const m = /^results-(?!archive-)([A-Za-z0-9_-]+)\.md$/.exec(name);
+      if (!m) continue;
+      const v = readAttemptResultsFile(join(dir, name), m[1]);
+      if (v) attempts.push(v);
+    }
+    attempts.sort((a, b) => String(b.attempt ?? "").localeCompare(String(a.attempt ?? "")));
+    return { summary, attempts };
+  } catch {
+    return empty;
+  }
+}
+
 // ---- g-190：从目标解绑执行子代理 ----
 
 /** 读取目标当前的有效执行子代理绑定（g-190）。
@@ -5169,6 +5512,9 @@ export function unbindGoalChild(
     throw new GraphError("非法 child_id：" + childIdOpt);
   }
 
+  // g-374：解绑/取代的完成摘要占位清单（落盘时 attempt.md 的 child_id 已被清除，须先在锁内捕获）。
+  const detachedForResults: Array<{ attempt: string; childId: string | null; reason: string }> = [];
+
   const result = withTx(
     { root, actor, goal: goalId },
     { lockName: "unbind-" + goalId },
@@ -5228,6 +5574,12 @@ export function unbindGoalChild(
       }
       const prevVersion = binding.binding_version;
       const detachedAt = nowIso();
+      // g-374：本 attempt 的解绑 ⇒ 完成摘要占位（source=detach）。
+      detachedForResults.push({
+        attempt: binding.attempt,
+        childId: binding.child_id ?? null,
+        reason: legacy ? "legacy-detach" : "detach",
+      });
       // 事件先行（R-02）：legacy 写 attempt.detached，正常解绑写 attempt.unbound
       if (legacy) {
         appendEvent(root, {
@@ -5291,6 +5643,7 @@ export function unbindGoalChild(
             if (oldDoc.meta.detached === true) continue;
             if (!oldDoc.meta.child_id) continue;
             // 标记为 superseded（被新 attempt 绑定取代）
+            const supersededChildId = oldDoc.meta.child_id ?? null;
             oldDoc.meta.detached = true;
             oldDoc.meta.detached_at = detachedAt;
             oldDoc.meta.detached_by = "system:superseded";
@@ -5299,6 +5652,8 @@ export function unbindGoalChild(
             delete oldDoc.meta.child_id;
             delete oldDoc.meta.parent_session_id;
             saveGoal(oldFile, oldDoc);
+            // g-374：被取代的旧 attempt 也记完成摘要占位（source=detach / reason=superseded）。
+            detachedForResults.push({ attempt: oldAtt, childId: supersededChildId, reason: "superseded" });
             // 记录事件
             appendEvent(root, {
               actor: "system",
@@ -5327,6 +5682,13 @@ export function unbindGoalChild(
   if (!result.ok) {
     if (result.recoverable) throw new GraphConflictError(result.error);
     throw new GraphError(result.error);
+  }
+  // g-374：解绑/取代 ⇒ 完成摘要占位（source=detach）。keepExisting=true：绝不覆盖已截获的真实输出。
+  for (const d of detachedForResults) {
+    writeAttemptResults(root, {
+      goal: goalId, attempt: d.attempt, source: "detach", childId: d.childId,
+      reason: d.reason, actor, keepExisting: true,
+    });
   }
   return result.value;
 }
@@ -5366,6 +5728,8 @@ export function abandonAttempt(
     throw new GraphError("非法 attempt id：" + attempt);
   }
 
+  // g-374：放弃分支的完成摘要占位需要原 child_id（落盘时 attempt.md 已清除绑定）。
+  let abandonedChildId: string | null = null;
   const result = withTx(
     { root, actor, goal: goalId },
     { lockName: "unbind-" + goalId },
@@ -5410,6 +5774,7 @@ export function abandonAttempt(
       }
 
       const abandonedAt = nowIso();
+      abandonedChildId = doc.meta.child_id ?? null;
       // 事件先行：attempt.abandoned
       appendEvent(root, {
         actor,
@@ -5445,6 +5810,13 @@ export function abandonAttempt(
   if (!result.ok) {
     if (result.recoverable) throw new GraphConflictError(result.error);
     throw new GraphError(result.error);
+  }
+  // g-374：放弃 ⇒ 完成摘要占位（source=abandon）。keepExisting=true：绝不覆盖已截获的真实输出。
+  if (result.value.abandoned === true) {
+    writeAttemptResults(root, {
+      goal: goalId, attempt, source: "abandon", childId: abandonedChildId,
+      reason: `abandoned: ${reason}`, actor, keepExisting: true,
+    });
   }
   return result.value;
 }
@@ -6579,6 +6951,9 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
     directive,
     comments,
     handoff,
+    // g-374 F1：完成摘要只读投影（<goalDir>/results.md + results-att-*.md）。
+    // 只在此处新增字段——不得改 getCachedBoardPayload（会牵连缓存签名与既有 fixture）。
+    results: goalResults(root, goalId),
   };
 }
 

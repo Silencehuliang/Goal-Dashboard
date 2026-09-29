@@ -189,6 +189,19 @@
       'tab.openFailed': '⚠️ 打开失败：',
       'tab.pathCopiedNoOpen': '✅ 路径已复制（打开不可用）',
 
+      // === g-374：完成摘要只读 tab ===
+      'tab.results': '📝 完成摘要',
+      'results.title': '📝 完成摘要',
+      'results.summaryTitle': '📄 规范化摘要（results.md）',
+      'results.attemptTitle': '🧾 子代理输出',
+      'results.noResults': '暂无完成摘要（尚无可截获的子代理输出）',
+      'results.emptyBody': '（无正文）',
+      'results.truncatedBadge': '✂️ 已截断',
+      'results.placeholderBadge': '🧩 占位（无子代理输出）',
+      'results.degradedBadge': '⚠️ 降级读取',
+      'results.generatedAt': '写入时间',
+      'results.readOnlyNote': '本页只读；文件由机器生成，下次写入整体覆盖。',
+
       // === 目标描述段 ===
       'section.description': '📋 目标描述',
       'description.editInPlace': '就地编辑目标描述',
@@ -1217,6 +1230,19 @@
       'tab.pathCopied': '✅ Path copied',
       'tab.openFailed': '⚠️ Failed to open: ',
       'tab.pathCopiedNoOpen': '✅ Path copied (open unavailable)',
+
+      // === g-374: read-only Results tab ===
+      'tab.results': '📝 Results',
+      'results.title': '📝 Results',
+      'results.summaryTitle': '📄 Normalized summary (results.md)',
+      'results.attemptTitle': '🧾 Subagent output',
+      'results.noResults': 'No completion summary yet (no capturable subagent output)',
+      'results.emptyBody': '(no body)',
+      'results.truncatedBadge': '✂️ Truncated',
+      'results.placeholderBadge': '🧩 Placeholder (no subagent output)',
+      'results.degradedBadge': '⚠️ Degraded read',
+      'results.generatedAt': 'Generated',
+      'results.readOnlyNote': 'Read-only; files are machine-generated and overwritten on the next write.',
 
       // === Sections ===
       'section.description': '📋 Goal Description',
