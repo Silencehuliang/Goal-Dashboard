@@ -317,6 +317,40 @@ test("g-374 F5：REST 面 llm+content 同样互斥（400，且零派发）", asy
   assert.equal(h.capturedRequests.length, before, "拒绝必须发生在派发之前（零副作用）");
 });
 
+test("g-374 F5 竞态方向：陈旧 llm 版（本次 spawn 之前落盘）+ 历史已变 + 本次从未落盘 ⇒ 仍须降级并归档旧版", async () => {
+  const h = createHarness();
+  const { goal, dir } = prepare(h);
+  appendGoalComment(h.root, goal, "陈旧 llm 版用例。", "human:gui");
+  // ① spawn 之前就存在一个 llm 版（其 generated_at 严格早于下面的 spawnedAt）——这是「陈旧」而非「本次落盘」。
+  refreshGoalResults(h.root, goal, {
+    actor: "agent:summarizer", content: "## 结论\n上一次的 LLM 正文（陈旧，不是本次产出）。", source: "llm",
+  });
+  await new Promise((r) => setTimeout(r, 20)); // 让 generated_at 严格早于 spawnedAt（毫秒精度）
+  // ② 历史发生变化（一条评论足够）⇒ 陈旧 llm 版的 source_hash 与当前历史不符 ⇒ cache_hit=false
+  appendGoalComment(h.root, goal, "spawn 之前历史又变了。", "human:gui");
+  const spawned = await h.call("graph_refresh_results", { goal, llm: true });
+  const childId = spawned.items[0].child_id as string;
+  assert.ok(childId, "必须成功派发（否则本用例退化）");
+  assert.equal(goalResultsCacheState(h.root, goal).cache_hit, false, "前置：陈旧 llm 版不算命中");
+
+  // ③ 本次 spawn 从未落盘任何正文 ⇒ 必须降级 deterministic（且不得把「陈旧 llm 版」当成本次成果）
+  h.emit("subagent/end", {
+    id: childId, local: true, stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "无落盘" }],
+  });
+
+  const now = readFileSync(goalResultsSummaryFile(join(h.root, "versions/v1.0/goals", goal, "goal.md")), "utf8");
+  assert.match(now, /^source: deterministic$/m, "本次没落盘就必须降级（generated_at 判据方向：只有 ≥ spawnedAt 才算本次落盘）");
+  assert.match(now, /^fallback_reason: subagent-end: completed$/m);
+  assert.ok(!now.includes("上一次的 LLM 正文（陈旧，不是本次产出）"), "陈旧正文不得当作本次成果留在正文里");
+
+  // ④ 旧 llm 版必须被归档保留（不丢历史、不就地覆盖）
+  const archives = readdirSync(dir).filter((n) => /^results-archive-\d{8}T\d{6}(-\d+)?\.md$/.test(n));
+  assert.equal(archives.length, 1, `降级写入必须归档旧版：${archives.join(",")}`);
+  const archived = readFileSync(join(dir, archives[0]), "utf8");
+  assert.match(archived, /^source: llm$/m, "被归档的必须是那份陈旧 llm 版");
+  assert.ok(archived.includes("上一次的 LLM 正文（陈旧，不是本次产出）"));
+});
+
 // ============================================================================
 // ⑤ 成本/防抖：source_hash 缓存键
 // ============================================================================

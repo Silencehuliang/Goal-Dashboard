@@ -1190,13 +1190,21 @@ export function apply(ctx, config) {
   };
 
   /**
-   * g-374 F5（复核 BLOCK-1 返工）：把某目标下**仍待结束**的 summarizer 项标记为「已落盘正文」。
+   * g-374 F5（复核 BLOCK-1 返工）：把某目标下**全部仍待结束**的 summarizer 项标记为「已落盘正文」。
    *
    * 反例（复核实测）：summarizer 已成功落盘 LLM 正文，但在它结束前历史发生变化（例如一条
    * `attempt.status_reported` 就足以改变 `source_hash`）⇒ 用 `cache_hit` 判断「本次是否已落盘」
    * 会得出 false ⇒ child 结束时用 deterministic **覆盖刚产出的 LLM 正文**，并把 `fallback_reason`
    * 写成 `subagent-end: completed`，界面显示「LLM 摘要失败」——LLM 实际成功，是虚假失败提示。
    * 落盘路径都会调用本函数（无竞态：落盘与 child 结束都在事件/工具回调侧，按先后顺序执行）。
+   *
+   * **粒度说明（复核注记 2）**：按 **goal** 标记，因此会把该目标下**所有**仍待结束的项一起标记，
+   * 而不只是刚落盘那个 child。选择 goal 粒度而非 child 精度的理由：①落盘路径（工具/REST）此时
+   * 并不知道自己对应哪个 childId（正文由子代理经工具回传，工具参数里没有 child_id），要精确标记
+   * 只能反查「哪个 child 正在写这个目标」，反而引入新的时序假设；②同一目标正常只有一个在飞
+   * summarizer（再次点击会先命中缓存或由用户 force）；③越界标记的后果是**良性**的——同目标已经
+   * 有了更新的外部正文，此时不降级是更安全的一侧（少一次覆盖、少一次浪费的调用），最坏情况是
+   * 某个真正失败的 child 不再写 deterministic 兜底，而那份正文仍在、用户在 GUI 上仍可再次触发。
    */
   const markSummarizerLanded = (goal) => {
     if (!goal) return 0;
