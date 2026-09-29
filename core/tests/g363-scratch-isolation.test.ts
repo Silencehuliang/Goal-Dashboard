@@ -25,6 +25,9 @@
  *  A2. 传参形状（字符级、平台无关）：`git check-ignore` 走**参数数组**（不经 shell）⇒ 参数里
  *      不得出现引号字符、路径必须以 `/` 分隔 —— Windows 上 `execSync` 字符串形式会因 cmd.exe
  *      不剥离单引号、`relative()` 产出 `\` 而恒判「未忽略」（scratch 判定失效 ⇒ 三个出口回归）。
+ *  A3. 调用形状（用 `_gitRunner` 替身记录）：scratch 判定真的调用 `execFileSync("git", argv)`，
+ *      且**没有**任何含 `check-ignore` 的字符串命令 —— 单靠 A2 挡不住「保留纯函数、调用点改回
+ *      shell 字符串」这种静默回归（变异 ③ 实测：只红 A2/A3）。
  *  B. 不变量（负向对照，本套件的核心）：把夹具**真的写一遍**（init + createGoal +
  *     writeProjectConfig + listWorktrees + prepareAttemptWorktree），真实看板/真实 worktree
  *     注册表必须一字不沾 —— 断言用本次唯一的 marker 定位，对并发写看板免疫；
@@ -44,6 +47,7 @@ import { join, resolve } from "node:path";
 import { createGoal, init, writeProjectConfig } from "../ops.ts";
 import {
   _clearCanonicalRootCache,
+  _gitRunner,
   checkIgnoreArgv,
   discoverGitWorktree,
   isScratchWorkspace,
@@ -210,6 +214,46 @@ test("g-363 A2（字符级，平台无关）：check-ignore 参数数组不含�
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+test("g-363 A3（调用形状，平台无关）：scratch 判定真的走数组签名，且不经 shell 字符串命令", () => {
+  _clearCanonicalRootCache();
+  const fixture = makeScratchFixture("callshape");
+  const fileCalls: Array<{ file: string; args: string[] }> = [];
+  const syncCalls: string[] = [];
+  const origFile = _gitRunner.execFileSync;
+  const origSync = _gitRunner.execSync;
+  try {
+    // 替身只拦 execFileSync（视为「已忽略」）；execSync 仍转发给真实 git（rev-parse / worktree list
+    // 需要真输出），但记录字符串命令，用于断言 check-ignore **没有**走字符串形式。
+    _gitRunner.execFileSync = ((file: string, args: string[]) => {
+      fileCalls.push({ file, args });
+      return "";
+    }) as any;
+    _gitRunner.execSync = ((cmd: string, opts?: any) => {
+      syncCalls.push(cmd);
+      return origSync(cmd, opts);
+    }) as any;
+    assert.equal(isScratchWorkspace(fixture), true, "替身视为已忽略 ⇒ 非工作树根子目录即 scratch");
+  } finally {
+    _gitRunner.execFileSync = origFile;
+    _gitRunner.execSync = origSync;
+  }
+
+  assert.equal(fileCalls.length, 1, "scratch 判定必须恰好调用一次数组签名");
+  const call = fileCalls[0]!;
+  assert.equal(call.file, "git");
+  assert.deepEqual(call.args.slice(0, 3), ["check-ignore", "-q", "--"], "必须是 check-ignore 的参数数组");
+  const pathArg = call.args[3] ?? "";
+  assert.ok(
+    call.args.every((a) => !a.includes("'") && !a.includes('"')),
+    `参数数组不得含引号字符（Windows cmd.exe 不剥离单引号）：${JSON.stringify(call.args)}`,
+  );
+  assert.ok(pathArg.endsWith("/") && !pathArg.includes("\\"), `路径必须 / 分隔且带尾斜杠：${pathArg}`);
+  assert.ok(
+    !syncCalls.some((c) => c.includes("check-ignore")),
+    `check-ignore 不得走字符串命令（shell 会吞/留引号，Windows 上完全失效）：${syncCalls.join(" | ")}`,
+  );
 });
 
 test("g-363：仓库 git-ignored tmp/ 下的夹具按独立项目解析（TMPDIR 落仓库内的关键路径）", () => {

@@ -179,25 +179,28 @@ node --test core/tests/*.test.ts             # 与主树同一命令、同一口
 
 | 口径 | 命令 | 结果 |
 |---|---|---|
-| worktree + `TMPDIR` 落 worktree | `TMPDIR=$PWD/tmp node --test core/tests/*.test.ts` | 1416 pass / **0 fail** / exit 0 |
-| worktree + 默认 `TMPDIR` | `node --test core/tests/*.test.ts` | 1416 pass / **0 fail** / exit 0 |
+| worktree + `TMPDIR` 落 worktree | `TMPDIR=$PWD/tmp node --test core/tests/*.test.ts` | 1417 pass / **0 fail** / exit 0 |
+| worktree + 默认 `TMPDIR` | `node --test core/tests/*.test.ts` | 1417 pass / **0 fail** / exit 0 |
 | 主树（发布门禁口径） | `node --test core/tests/*.test.ts` | 1406 tests / 1405 pass / 1 fail（`dist-freshness-g312`：主树 `dist/` 相对源陈旧，**与本次改动无关**，重建后即绿） |
 
-  （1416 = 修复前 1415 + 返工时新增的 A2 字符级守卫；主树一行是在**主树自己的代码/测试**上取的，
-  故仍为 1406。）
+  （1417 = 修复前 1415 + 返工时新增的 A2 字符级守卫、A3 调用形状守卫；主树一行是在**主树自己的
+  代码/测试**上取的，故仍为 1406。）
   三条口径跑完后真实 `.dsh-graph/project.yaml`、`memory/memory.jsonl` md5 未变、
   `git worktree list` 未变、`events.jsonl` 行数未增 —— 即「不污染真实看板」的不变量成立。
   修复前同一命令（worktree + `TMPDIR` 落 worktree）为 **47 fail / 1359 pass / exit 1**。
-- **判别力（改坏即红，变异命令与统计范围写明）**：变异只改 `core/root.ts` **一行**，先用副本备份、
-  跑完按副本还原（还原后 `md5` 与备份逐字节一致）；两种统计范围都给出 ——
-  守卫文件全量 `node --test core/tests/g363-scratch-isolation.test.ts`（10 条）与
-  全量套件 `node --test core/tests/*.test.ts`（默认 `TMPDIR`，1416 条）：
-  - 变异 ①：把 scratch 边界改成恒假（`const isScratch = false;`）⇒ 守卫 **8/10 红**（除「不误伤
-    linked worktree 根」与「非 scratch 干净度」两条），全量 **1408 pass / 8 fail**；
-  - 变异 ②：撤「scratch 不进项目工作树」（让 `discoverGitWorktree` 对 scratch 仍返回 info）⇒
-    守卫 **7/10 红**，全量 **1409 pass / 7 fail**；
-  - 还原后守卫 **10/10 绿**、全量 **1416 pass / 0 fail**。
-  两次变异运行期间真实看板**零污染**：两条写入类不变量**在写入前**就断言失败（前置断言在前），
+- **判别力（改坏即红，变异命令与统计范围写明）**：每个变异只改 `core/root.ts` **一处**，先用副本
+  备份、跑完按副本还原（还原后 `md5` 与备份逐字节一致）；两种统计范围都给出 ——
+  守卫文件全量 `node --test core/tests/g363-scratch-isolation.test.ts`（11 条）与
+  全量套件 `node --test core/tests/*.test.ts`（默认 `TMPDIR`，1417 条）：
+  - 变异 ①：scratch 边界改成恒假（`const isScratch = false;`）⇒ 守卫 **9/11 红**（仅「不误伤
+    linked worktree 根」「非 scratch 干净度」两条仍绿），全量 **1408 pass / 9 fail**；
+  - 变异 ②：撤「scratch 不进项目工作树」（`discoverGitWorktree` 对 scratch 仍返回 info）⇒
+    守卫 **7/11 红**，全量 **1410 pass / 7 fail**；
+  - 变异 ③：调用形状改回 shell 字符串命令（`execSync(\`git check-ignore …\`)`，即 Windows 失效
+    的那个形态）⇒ 守卫 **2/11 红**（A2 端到端 + A3 调用形状），全量 **1415 pass / 2 fail**
+    —— 在 POSIX 上也会因未转义引号而失败，A3 正是钉住「不许再写成字符串命令」的那条；
+  - 还原后守卫 **11/11 绿**、全量 **1417 pass / 0 fail**。
+  三次变异运行期间真实看板**零污染**：两条写入类不变量**在写入前**就断言失败（前置断言在前），
   且 `project.yaml`/`memory.jsonl` md5 未变、`events.jsonl` 未增、无 `.worktrees/g-363-att-99`
   注册、看板内无夹具 marker。
 - **已知限制（如实登记，本目标未收敛）**：REST 路由把写操作 actor **硬编码为 `human:gui`**
