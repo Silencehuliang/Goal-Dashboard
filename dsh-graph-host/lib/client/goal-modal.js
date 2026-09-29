@@ -590,13 +590,19 @@
           : attempts.map(row)));
     }
 
-    // g-374 F1：完成摘要只读 tab —— 先 results.md（F2 规范化摘要，若存在），再按 attempt 倒序列出
-    // results-att-*.md。只读、零新增网络请求（数据来自 /api/dsh-graph/goal 的 detail.results）。
+    // g-374 F1/F3：完成摘要 tab —— 先 results.md（F2 规范化摘要，若存在），再按 attempt 倒序列出
+    // results-att-*.md；**不是只读**：F3-a（负责人硬需求）在 tab 内提供用户可直接点击的
+    // 「更新摘要」动作，点击即按 F2 规则重写 results.md（旧版归档），无需命令行/会话指令。
+    // 唯一新增网络请求是这一条显式用户动作（POST /api/dsh-graph/refresh-results）；
+    // 列表数据仍来自 /api/dsh-graph/goal 的 detail.results（零额外轮询）。
     // 文件缺失/损坏/超大一律以可见文案降级（沿用 g-275 渲染期解引用保护：全程可选链，不抛错）。
     function AttemptResults(props) {
       const results = props.results ?? {};
       const summary = results.summary ?? null;
       const attempts = Array.isArray(results.attempts) ? results.attempts : [];
+      const omitted = Number(results.omitted) || 0;
+      const [busy, setBusy] = React.useState(false);
+      const [note, setNote] = React.useState(null);
       const metaLine = (r) => {
         const parts = [];
         if (r?.generated_at) parts.push(`${dgT("results.generatedAt")} ${r.generated_at}`);
@@ -623,12 +629,62 @@
         const r = attempts[i];
         sections.push(block(`att-${r?.attempt ?? i}`, `${dgT("results.attemptTitle")} ${r?.attempt ?? "?"}`, r));
       }
+      // F3-a：用户可直接点击的「更新摘要」动作（进行中/成功/空态/失败都有可见反馈 + 归档文件名）。
+      const baseName = (p) => String(p ?? "").split(/[\\/]/).pop();
+      const doRefresh = () => {
+        if (busy) return;
+        const url = graphUrl("/api/dsh-graph/refresh-results");
+        if (!url) { setNote({ kind: "err", text: dgT("results.refreshNoWorkspace") }); return; }
+        setBusy(true);
+        setNote({ kind: "busy", text: dgT("results.refreshing") });
+        fetch(url, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ goal: props.goalId }),
+        })
+          .then((r) => r.json().then((d) => ({ httpOk: r.ok, d })))
+          .then(({ httpOk, d }) => {
+            if (d?.ok) {
+              setNote({
+                kind: "ok",
+                text: d.archive
+                  ? `${dgT("results.refreshOk")} ｜ ${dgT("results.refreshArchived")} ${baseName(d.archive)}`
+                  : `${dgT("results.refreshOk")} ｜ ${dgT("results.refreshFirst")}`,
+              });
+            } else if (httpOk && d?.reason) {
+              setNote({ kind: "skip", text: `${dgT("results.refreshSkipped")}（${d.reason}）` });
+            } else {
+              setNote({ kind: "err", text: dgT("results.refreshFail") + (d?.error ?? "") });
+            }
+            if (typeof props.onRefreshed === "function") props.onRefreshed();
+          })
+          .catch((e) => setNote({ kind: "err", text: dgT("results.refreshFail") + String(e?.message ?? e) }))
+          .then(() => setBusy(false));
+      };
+      const noteColor = note?.kind === "err"
+        ? "var(--dsw-alias-state-error-primary, #d66)"
+        : note?.kind === "ok"
+          ? "var(--dsw-alias-state-success-primary, #3a3)"
+          : "inherit";
       return h("div", { key: "results", style: S.modalSection },
-        h("div", { style: S.modalH }, dgT("results.title")),
+        h("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+          h("div", { style: S.modalH }, dgT("results.title")),
+          h("button", {
+            className: "dg-btn",
+            style: { ...S.btn, fontSize: 11, padding: "0 8px", opacity: busy ? 0.6 : 1 },
+            disabled: busy ? true : undefined,
+            title: dgT("results.refreshHint"),
+            onClick: (e) => { e.stopPropagation(); doRefresh(); },
+          }, busy ? dgT("results.refreshing") : dgT("results.refresh"))),
+        note
+          ? h("div", { style: { fontSize: 11, marginTop: 4, color: noteColor, opacity: note.kind === "skip" ? 0.85 : 1 } }, note.text)
+          : null,
+        omitted > 0
+          ? h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, `${dgT("results.omittedNote")}（${omitted}）`)
+          : null,
         sections.length
           ? h("div", null, ...sections)
           : h("div", { style: { ...S.meta, fontSize: 12, marginTop: 4 } }, dgT("results.noResults")),
-        h("div", { style: { ...S.meta, fontSize: 11, marginTop: 6, opacity: 0.75 } }, dgT("results.readOnlyNote")));
+        h("div", { style: { ...S.meta, fontSize: 11, marginTop: 6, opacity: 0.75 } }, dgT("results.writeNote")));
     }
 
     function GoalModal(props) {
@@ -941,9 +997,10 @@
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
         ];
-        // g-374 F1：只读「完成摘要」tab（results.md + results-att-*.md，attempt 倒序）。
+        // g-374 F1/F3：「完成摘要」tab（results.md + results-att-*.md，attempt 倒序）；
+        // F3-a 在该 tab 内提供可直接点击的「更新摘要」动作（onRefreshed 重载详情显示新摘要）。
         const resultsTab = [
-          h(AttemptResults, { key: "results", results: d.results }),
+          h(AttemptResults, { key: "results", results: d.results, goalId: props.id, onRefreshed: load }),
         ];
         const activityTab = (() => {
           const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));

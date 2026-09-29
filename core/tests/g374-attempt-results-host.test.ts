@@ -172,20 +172,28 @@ test("g-374 F1：特性探测——payload 完全不含 g-374 载荷（无字段
   assert.equal(resultsEvents(h.root, "attempt.results_skipped").length, 0, "已登记 child 不做无意义留痕");
 });
 
-test("g-374 F1：Map miss（宿主重启冷恢复）⇒ 不猜归属、不写文件、不抛错，仅留痕", async () => {
+test("g-374 F1/F3：Map miss（宿主重启冷恢复）⇒ 不猜归属、不写文件、不抛错，仅 stderr 留痕（不污染看板事件流）", async () => {
   const h = createHarness();
   const { goal, dir } = prepare(h);
   await dispatch(h, goal);
-  assert.doesNotThrow(() => h.emit("subagent/end", {
-    id: "child-unknown-cold-restore", local: true, stopReason: "completed",
-    lastAssistantMessage: [{ type: "text", text: "不属于任何已知 attempt" }],
-  }));
+  const chunks: string[] = [];
+  const orig = process.stderr.write;
+  (process.stderr as any).write = (c: any) => { chunks.push(String(c)); return true; };
+  try {
+    assert.doesNotThrow(() => h.emit("subagent/end", {
+      id: "child-unknown-cold-restore", local: true, stopReason: "completed",
+      lastAssistantMessage: [{ type: "text", text: "不属于任何已知 attempt" }],
+    }));
+  } finally {
+    (process.stderr as any).write = orig;
+  }
   assert.deepEqual(readdirSync(dir).filter((n) => n.startsWith("results-")), [], "Map miss 绝不写文件");
   assert.equal(resultsEvents(h.root, "attempt.results_written").length, 0);
-  const skipped = resultsEvents(h.root, "attempt.results_skipped");
-  assert.equal(skipped.length, 1, "必须留痕（可审计）");
-  assert.equal(skipped[0].details.reason, "unmapped");
-  assert.equal(skipped[0].details.unmapped, true);
+  // g-374 F3（F1 复核注记③）：对所有非 attempt 子代理记 attempt.results_skipped ⇒ 事件流噪声无界增长
+  // 且不可归因到目标。契约收敛为**纯 stderr**：诊断保留，看板事件流零写入。
+  assert.equal(resultsEvents(h.root, "attempt.results_skipped").length, 0, "不得污染事件流（降级为纯 stderr）");
+  assert.ok(chunks.join("").includes("child-unknown-cold-restore"), "必须留 stderr 诊断（可排查）");
+  assert.ok(chunks.join("").includes("未登记"), "stderr 文案需指出归属未登记");
 });
 
 test("g-374 F1：非 continuable（local=false）事件跳过，不写文件", async () => {

@@ -54,6 +54,7 @@ import {
   criteriaItems,
   allCriteriaVerified,
   verifiedCriteriaItems,
+  isCriterionVerified,
   CRITERIA_VERIFIED_MARK,
   normalizeGoalType,
   normalizeGoalTags,
@@ -5021,7 +5022,7 @@ export const ATTEMPT_RESULTS_READ_MAX_BYTES = 1024 * 1024;
  * `manual`（人工或主管写入，同一格式、同一路径约定、同一覆盖策略；由后续 F3 工具复用本写入器）。
  * 写入器**不做取值校验**：未知取值原样落盘，格式保持不变；新增来源无需改动本文件。
  */
-export const ATTEMPT_RESULTS_SOURCES = ["subagent/end", "child_error", "abandon", "detach", "manual"] as const;
+export const ATTEMPT_RESULTS_SOURCES = ["subagent/end", "child_error", "abandon", "detach", "manual", "history"] as const;
 /** `(string & {})` 保留已知取值的自动补全，同时允许任意扩展取值（开放集合）。 */
 export type AttemptResultsSource = (typeof ATTEMPT_RESULTS_SOURCES)[number] | (string & {});
 
@@ -5030,6 +5031,29 @@ const RESULTS_HEADER_BEGIN = "<!-- dsh-graph:results:begin -->";
 const RESULTS_HEADER_END = "<!-- dsh-graph:results:end -->";
 /** g-374：覆盖式说明（唯一文案源；文件头之后与交付说明必须逐字一致）。 */
 const RESULTS_OVERWRITE_NOTE = "本文件由机器生成，下次写入整体覆盖";
+/** g-374 F2：`results.md` 机器头的 `source` 取值（由目标历史零 LLM 拼装，非子代理输出）。 */
+const RESULTS_SOURCE_HISTORY = "history";
+
+/**
+ * g-374 F1 复核注记②（必修）：机器头字段值必须**单行**。
+ *
+ * 为什么：`source` / `reason` / `child_id` / `actor` 由调用方（宿主事件载荷、F3 的写入工具）
+ * 传入，含换行即可在机器头内**注入伪字段**（复核者对抗用例复现，读取侧「后者胜」）。
+ * 写入前一律把换行类字符（CRLF / CR / U+2028 / U+2029）折叠为单个空格 ⇒ 值永远只占一行、
+ * 不可能凭空造出第二行字段；值内出现的机器头标记文本（`<!-- dsh-graph:results:* -->`）也一并
+ * 中和为 `[results-marker]`，使「标记只出现一次」成为写侧可断言的性质。
+ * 读取侧另加第二重防御：**只把独占一行的结束标记**当真（见 {@link findResultsHeaderEnd}），
+ * 因此即便有人手工塞入含标记文本的值也不会提前截断机器头。
+ * 已知取值（`subagent/end` / `manual` / `child-error: …` 等）一律**逐字不变**。
+ */
+function sanitizeResultsHeaderValue(value: unknown): string {
+  return String(value ?? "")
+    .replace(/\r\n?/g, " ")
+    .replace(/[\n\u2028\u2029]/g, " ")
+    .split(RESULTS_HEADER_BEGIN).join("[results-marker]")
+    .split(RESULTS_HEADER_END).join("[results-marker]")
+    .trim();
+}
 
 /** 占位正文里的来源解释——让三类占位在**文件内**也能被区分（不必依赖事件流）。 */
 const RESULTS_SOURCE_EXPLAIN: Record<string, string> = {
@@ -5050,6 +5074,8 @@ export interface AttemptResultsHeader {
   truncated: boolean;
   placeholder: boolean;
   reason: string | null;
+  /** g-374 F4：写入者标注（自动截获 = 子代理 actor；人工写入 = 主管/用户 actor）。 */
+  actor: string | null;
   bytes: number;
   original_bytes: number;
 }
@@ -5113,28 +5139,34 @@ function attemptResultsPlaceholderBody(source: string, reason: string | null, st
   ].join("\n");
 }
 
-/** g-374：结果文件全文（机器头 + 覆盖说明 + 摘要正文）。 */
+/** g-374：结果文件全文（机器头 + 覆盖说明 + 摘要正文）。
+ *  所有字段值经 {@link sanitizeResultsHeaderValue} 折叠为单行——机器头**不可能**被调用方传入的
+ *  换行注入伪字段（F1 复核注记②必修项）。 */
 function renderAttemptResultsFile(h: AttemptResultsHeader, body: string, warnLine: string | null): string {
   const head = [
     RESULTS_HEADER_BEGIN,
-    `generated_at: ${h.generated_at}`,
-    `goal: ${h.goal}`,
-    `attempt: ${h.attempt}`,
-    `child_id: ${h.child_id ?? "null"}`,
-    `source: ${h.source}`,
-    `stop_reason: ${h.stop_reason ?? "null"}`,
+    `generated_at: ${sanitizeResultsHeaderValue(h.generated_at)}`,
+    `goal: ${sanitizeResultsHeaderValue(h.goal)}`,
+    `attempt: ${sanitizeResultsHeaderValue(h.attempt)}`,
+    `child_id: ${sanitizeResultsHeaderValue(h.child_id) || "null"}`,
+    `source: ${sanitizeResultsHeaderValue(h.source)}`,
+    `stop_reason: ${sanitizeResultsHeaderValue(h.stop_reason) || "null"}`,
     `truncated: ${h.truncated ? "true" : "false"}`,
     `placeholder: ${h.placeholder ? "true" : "false"}`,
-    `reason: ${h.reason ?? "null"}`,
+    `reason: ${sanitizeResultsHeaderValue(h.reason) || "null"}`,
+    `actor: ${sanitizeResultsHeaderValue(h.actor) || "null"}`,
     `bytes: ${h.bytes}`,
     `original_bytes: ${h.original_bytes}`,
     RESULTS_HEADER_END,
   ];
   const notes = [`> ⚠️ ${RESULTS_OVERWRITE_NOTE}（手工编辑会被覆盖）。`];
   if (h.truncated) notes.push(`> ✂️ 已截断：原始 ${h.original_bytes} 字节，仅保留前 ${h.bytes} 字节。`);
-  if (h.placeholder) notes.push(`> 🧩 占位：source=\`${h.source}\`，reason=\`${h.reason ?? "null"}\`。`);
+  if (h.placeholder) notes.push(`> 🧩 占位：source=\`${sanitizeResultsHeaderValue(h.source)}\`，reason=\`${sanitizeResultsHeaderValue(h.reason) || "null"}\`。`);
+  if (sanitizeResultsHeaderValue(h.source) === "manual") {
+    notes.push(`> ✍️ 人工写入（source=\`manual\`）；写入者：\`${sanitizeResultsHeaderValue(h.actor) || "unknown"}\`（非子代理输出）。`);
+  }
   if (warnLine) notes.push(warnLine);
-  return `${head.join("\n")}\n\n${notes.join("\n")}\n\n## ${h.attempt} 完成摘要\n\n${body}\n`;
+  return `${head.join("\n")}\n\n${notes.join("\n")}\n\n## ${sanitizeResultsHeaderValue(h.attempt)} 完成摘要\n\n${body}\n`;
 }
 
 /**
@@ -5159,24 +5191,25 @@ export function writeAttemptResults(root: string, opts: WriteAttemptResultsOptio
     if (!goalId) return fail("invalid-goal");
     if (!attempt || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(attempt)) return fail("invalid-attempt");
     // source 为**开放取值**：未知来源原样落盘（新增来源无需改本文件）；缺失/空 ⇒ 默认 subagent/end。
+    // 所有进入机器头的值一律经 sanitize（换行折叠为空格）——F1 复核注记②必修项：禁伪字段注入。
     const source: AttemptResultsSource = typeof opts?.source === "string" && opts.source.trim()
-      ? opts.source.trim()
+      ? sanitizeResultsHeaderValue(opts.source)
       : "subagent/end";
     const goalFile = findGoalFile(root, goalId);
     if (basename(goalFile) !== "goal.md") return fail("backlog-goal-no-dir");
     const file = attemptResultsFile(goalFile, attempt);
-    const actor = typeof opts.actor === "string" && opts.actor.trim() ? opts.actor.trim() : "system:results";
+    const actor = typeof opts.actor === "string" && opts.actor.trim() ? sanitizeResultsHeaderValue(opts.actor) : "system:results";
     const maxBytes = Number.isFinite(Number(opts.maxBytes)) && Number(opts.maxBytes) > 0
       ? Math.floor(Number(opts.maxBytes))
       : ATTEMPT_RESULTS_MAX_BYTES;
-    const childId = typeof opts.childId === "string" && opts.childId.trim() ? opts.childId.trim() : null;
-    const stopReason = typeof opts.stopReason === "string" && opts.stopReason.trim() ? opts.stopReason.trim() : null;
+    const childId = typeof opts.childId === "string" && opts.childId.trim() ? sanitizeResultsHeaderValue(opts.childId) : null;
+    const stopReason = typeof opts.stopReason === "string" && opts.stopReason.trim() ? sanitizeResultsHeaderValue(opts.stopReason) : null;
     // 默认不做内容过滤；仅 CRLF → LF 归一化（跨平台一致的可读性）。
     const rawText = typeof opts.text === "string" ? opts.text.replace(/\r\n/g, "\n") : "";
     const hasText = rawText.trim().length > 0;
     const abnormal = stopReason !== null && stopReason !== "completed";
     const placeholder = !hasText;
-    const explicitReason = typeof opts.reason === "string" && opts.reason.trim() ? opts.reason.trim() : null;
+    const explicitReason = typeof opts.reason === "string" && opts.reason.trim() ? sanitizeResultsHeaderValue(opts.reason) : null;
     const reason = explicitReason ?? (placeholder ? (abnormal ? `stop-${stopReason}` : "no-output") : null);
     const cut = truncateUtf8Bytes(
       hasText ? rawText : attemptResultsPlaceholderBody(source, reason, stopReason),
@@ -5185,7 +5218,7 @@ export function writeAttemptResults(root: string, opts: WriteAttemptResultsOptio
     const generatedAt = nowIsoMs();
     const header: AttemptResultsHeader = {
       generated_at: generatedAt, goal: goalId, attempt, child_id: childId, source,
-      stop_reason: stopReason, truncated: cut.truncated, placeholder, reason,
+      stop_reason: stopReason, truncated: cut.truncated, placeholder, reason, actor,
       bytes: cut.bytes, original_bytes: cut.original_bytes,
     };
     const content = renderAttemptResultsFile(
@@ -5207,7 +5240,7 @@ export function writeAttemptResults(root: string, opts: WriteAttemptResultsOptio
             events: [{
               actor, event: "attempt.results_skipped", goal: goalId,
               details: {
-                attempt, child_id: childId, source, stop_reason: stopReason,
+                attempt, child_id: childId, source, stop_reason: stopReason, writer: actor,
                 reason: "existing-results-kept", file, generated_at: generatedAt,
               },
             }],
@@ -5218,7 +5251,7 @@ export function writeAttemptResults(root: string, opts: WriteAttemptResultsOptio
           events: [{
             actor, event: "attempt.results_written", goal: goalId,
             details: {
-              attempt, child_id: childId, source, stop_reason: stopReason, reason, file,
+              attempt, child_id: childId, source, stop_reason: stopReason, reason, writer: actor, file,
               bytes: cut.bytes, original_bytes: cut.original_bytes,
               truncated: cut.truncated, placeholder, overwrite: existsSync(file),
               generated_at: generatedAt,
@@ -5239,7 +5272,7 @@ export function writeAttemptResults(root: string, opts: WriteAttemptResultsOptio
       try {
         appendEvent(root, {
           actor, event: "attempt.results_skipped", goal: goalId,
-          details: { attempt, child_id: childId, source, reason: "write-failed: " + msg, file },
+          details: { attempt, child_id: childId, source, writer: actor, reason: "write-failed: " + msg, file },
         });
       } catch { /* 忽略 */ }
       return fail("write-failed: " + msg, file);
@@ -5261,6 +5294,8 @@ export interface AttemptResultsView {
   child_id: string | null;
   source: string | null;
   stop_reason: string | null;
+  /** g-374 F4：写入者标注（`source=manual` 时用于区分谁写的）。 */
+  actor: string | null;
   truncated: boolean;
   placeholder: boolean;
   reason: string | null;
@@ -5271,6 +5306,25 @@ export interface AttemptResultsView {
   body: string;
   /** 非 null ⇒ 读取期降级（oversized / unparsable-header / read-failed）。 */
   degraded: string | null;
+}
+
+/**
+ * 定位机器头结束标记：**只认独占一行**的标记。
+ *
+ * 为什么不能只用 `indexOf`：字段值可能包含 `<!-- dsh-graph:results:end -->` 字样（手工文件、
+ * 或历史版本写入的未净化值），`indexOf` 会在值中间提前截断机器头并让后半段文本冒充字段。
+ * 写入侧已把值折叠为单行（{@link sanitizeResultsHeaderValue}），这里再加读取侧的第二重防御。
+ */
+function findResultsHeaderEnd(raw: string, from: number): number {
+  let idx = raw.indexOf(RESULTS_HEADER_END, from);
+  while (idx !== -1) {
+    const lineStart = raw.lastIndexOf("\n", idx - 1) + 1;
+    const before = raw.slice(lineStart, idx).trim();
+    const after = raw.slice(idx + RESULTS_HEADER_END.length);
+    if (before === "" && /^[ \t]*(\n|$)/.test(after)) return idx;
+    idx = raw.indexOf(RESULTS_HEADER_END, idx + 1);
+  }
+  return -1;
 }
 
 /** 只读解析一份结果文件；缺失/损坏/超大一律不抛错，以 degraded 标注降级。 */
@@ -5284,13 +5338,13 @@ function readAttemptResultsFile(file: string, attempt: string | null): AttemptRe
       ? readFileSync(file).subarray(0, ATTEMPT_RESULTS_READ_MAX_BYTES).toString("utf8")
       : readFileSync(file, "utf8");
     const view: AttemptResultsView = {
-      file, attempt, generated_at: null, child_id: null, source: null, stop_reason: null,
+      file, attempt, generated_at: null, child_id: null, source: null, stop_reason: null, actor: null,
       truncated: false, placeholder: false, reason: null,
       bytes: Buffer.byteLength(raw, "utf8"), text: raw, body: raw,
       degraded: oversized ? "oversized" : null,
     };
     const begin = raw.indexOf(RESULTS_HEADER_BEGIN);
-    const end = begin === -1 ? -1 : raw.indexOf(RESULTS_HEADER_END, begin);
+    const end = begin === -1 ? -1 : findResultsHeaderEnd(raw, begin + RESULTS_HEADER_BEGIN.length);
     if (begin === -1 || end === -1) {
       view.degraded = view.degraded ?? "unparsable-header";
       return view;
@@ -5305,6 +5359,7 @@ function readAttemptResultsFile(file: string, attempt: string | null): AttemptRe
         case "child_id": view.child_id = val; break;
         case "source": view.source = val; break;
         case "stop_reason": view.stop_reason = val; break;
+        case "actor": view.actor = val; break;
         case "truncated": view.truncated = val === "true"; break;
         case "placeholder": view.placeholder = val === "true"; break;
         case "reason": view.reason = val; break;
@@ -5324,17 +5379,26 @@ function readAttemptResultsFile(file: string, attempt: string | null): AttemptRe
  * g-374：目标目录下的完成摘要只读投影。
  * - `summary` = `<goalDir>/results.md`（F2 的规范化摘要；不存在 ⇒ null）；
  * - `attempts` = `<goalDir>/results-att-*.md`，按 attempt id 倒序；
+ * - `omitted` = 因**总量预算**（{@link GOAL_RESULTS_READ_TOTAL_MAX_BYTES}）未下发的 attempt 结果文件数
+ *   （F1 复核注记④：此前每次弹窗全量读、无总量上限 ⇒ attempt 多的目标响应可达数 MB）；
  * - 全程 try/catch + 逐文件降级：缺失/损坏/超大都不抛错（供 goalDetail 直接内联）。
  */
-export function goalResults(root: string, goalId: string): { summary: AttemptResultsView | null; attempts: AttemptResultsView[] } {
-  const empty = { summary: null as AttemptResultsView | null, attempts: [] as AttemptResultsView[] };
+export function goalResults(
+  root: string,
+  goalId: string,
+): { summary: AttemptResultsView | null; attempts: AttemptResultsView[]; omitted: number; archives: string[] } {
+  const empty = {
+    summary: null as AttemptResultsView | null, attempts: [] as AttemptResultsView[],
+    omitted: 0, archives: [] as string[],
+  };
   try {
     if (!root || !goalId) return empty;
     const file = findGoalFile(root, goalId);
     if (basename(file) !== "goal.md") return empty;
     const dir = dirname(file);
     if (!existsSync(dir)) return empty;
-    const summary = readAttemptResultsFile(join(dir, "results.md"), null);
+    // 路径唯一真源：与 F2 写入器共用 goalResultsSummaryFile（不得在此重复拼接文件名）
+    const summary = readAttemptResultsFile(goalResultsSummaryFile(file), null);
     const attempts: AttemptResultsView[] = [];
     for (const name of readdirSync(dir)) {
       // F2 的历史归档（results-archive-*.md）不是 attempt 结果文件，明确排除。
@@ -5344,9 +5408,426 @@ export function goalResults(root: string, goalId: string): { summary: AttemptRes
       if (v) attempts.push(v);
     }
     attempts.sort((a, b) => String(b.attempt ?? "").localeCompare(String(a.attempt ?? "")));
-    return { summary, attempts };
+    // 总量预算：按 attempt 倒序（最新优先）纳入，超预算的计入 omitted（UI 可见降级）。
+    let total = summary ? summary.bytes : 0;
+    const kept: AttemptResultsView[] = [];
+    let omitted = 0;
+    for (const v of attempts) {
+      if (total + v.bytes > GOAL_RESULTS_READ_TOTAL_MAX_BYTES) { omitted += 1; continue; }
+      total += v.bytes;
+      kept.push(v);
+    }
+    return { summary, attempts: kept, omitted, archives: goalResultsArchiveFiles(file) };
   } catch {
     return empty;
+  }
+}
+
+// ---- g-374 F2/F3：`results.md` 规范化摘要（零 LLM 拼装 + 旧版归档 + 单/批量） ----
+
+/** g-374 F2：`results.md` 本体的默认字节上限（UTF-8）；超限截断并在机器头与文件内双标注。 */
+export const GOAL_RESULTS_MAX_BYTES = 128 * 1024;
+/** g-374 F2：单次目标详情投影（summary + attempts）的**总量**上限；超出部分不下发（omitted 计数）。 */
+export const GOAL_RESULTS_READ_TOTAL_MAX_BYTES = 2 * 1024 * 1024;
+/** g-374 F2：`results.md` 本体文件名（写死；路径唯一真源见 {@link goalResultsSummaryFile}）。 */
+export const RESULTS_SUMMARY_NAME = "results.md";
+/** g-374 F2：历史归档文件名前缀（写死）。归档名形如 `results-archive-YYYYMMDDTHHMMSS.md`
+ *  （同一秒内多次归档追加 `-2`/`-3`…），必须被 attempt 结果投影正则 `results-(?!archive-)` 排除。 */
+export const RESULTS_ARCHIVE_PREFIX = "results-archive-";
+/** g-374 F2：归档文件名（含同秒冲突后缀）的可枚举正则。 */
+export const RESULTS_ARCHIVE_PATTERN = /^results-archive-\d{8}T\d{6}(?:-\d+)?\.md$/;
+/** g-374 F2：时间线段落最多列出的事件条数（其余以计数说明，不静默丢信息）。 */
+const GOAL_RESULTS_TIMELINE_MAX = 30;
+/** g-374 F2：关键决策段里单条评论的字数上限。 */
+const GOAL_RESULTS_COMMENT_MAX_CHARS = 600;
+/** g-374 F2：最近指令段的字数上限。 */
+const GOAL_RESULTS_DIRECTIVE_MAX_CHARS = 3000;
+
+/** `results.md` 的**唯一真源路径**（写入器与读取投影共用；不得在别处重复拼接文件名）。 */
+export function goalResultsSummaryFile(goalFile: string): string {
+  return join(goalDirOf(goalFile), RESULTS_SUMMARY_NAME);
+}
+
+/** 归档时间戳（本地时区，写死为 `YYYYMMDDTHHMMSS`）。 */
+export function resultsArchiveStamp(d: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
+    `T${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+  );
+}
+
+/** `results.md` 历史归档路径（唯一真源）：同秒冲突时追加 `-2`/`-3`…（仍匹配归档正则，可枚举）。 */
+export function goalResultsArchiveFile(goalFile: string, stamp: string): string {
+  const dir = goalDirOf(goalFile);
+  let file = join(dir, `${RESULTS_ARCHIVE_PREFIX}${stamp}.md`);
+  let n = 1;
+  while (existsSync(file)) {
+    n += 1;
+    file = join(dir, `${RESULTS_ARCHIVE_PREFIX}${stamp}-${n}.md`);
+  }
+  return file;
+}
+
+/**
+ * 目标目录下已有的 `results.md` 历史归档（按文件名升序**稳定**列举）。
+ *
+ * 注意：字典序下同秒冲突后缀 `-2` 会排在 `.md` 之前，故本函数只保证「稳定可枚举」，
+ * 不声称严格时间序（需要时间序请自行解析文件名里的 `YYYYMMDDTHHMMSS`）。
+ */
+export function goalResultsArchiveFiles(goalFile: string): string[] {
+  try {
+    const dir = goalDirOf(goalFile);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir).filter((n) => RESULTS_ARCHIVE_PATTERN.test(n)).sort();
+  } catch {
+    return [];
+  }
+}
+
+/** 单行化（段内文本统一压平，避免历史文本里的换行破坏摘要版面）。 */
+function oneLine(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** 按字数截断并显式标注（不静默丢信息）。 */
+function truncateChars(text: string, max: number): string {
+  const s = String(text ?? "");
+  return s.length <= max ? s : `${s.slice(0, max)}…（已截断 ${s.length - max} 字）`;
+}
+
+/** 结果摘要正文里的「首句」：跳过覆盖说明（`>`）与标题行后的第一行实质文本。 */
+function goalResultsFirstLine(body: unknown): string | null {
+  for (const raw of String(body ?? "").split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith(">") || line.startsWith("#") || line.startsWith("<!--")) continue;
+    return truncateChars(line, 160);
+  }
+  return null;
+}
+
+/** 事件摘要（时间线段落用）：按固定键优先级取最多 3 个 `k=v`，纯确定性、不猜语义。 */
+const GOAL_RESULTS_EVENT_KEYS = ["attempt", "to", "status", "result", "reason", "title", "child_id", "source", "file", "bytes", "note"];
+function goalResultsEventDigest(details: unknown): string {
+  const d = (details ?? {}) as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const k of GOAL_RESULTS_EVENT_KEYS) {
+    const v = d[k];
+    if (v === null || v === undefined || typeof v === "object") continue;
+    const s = oneLine(v);
+    if (!s) continue;
+    parts.push(`${k}=${truncateChars(s, 60)}`);
+    if (parts.length >= 3) break;
+  }
+  return parts.join(" ");
+}
+
+/** 最近指令原文的标题降级（`#` → 低一级），避免它冒充 results.md 的小节标题。 */
+function demoteHeadings(text: string): string {
+  return String(text ?? "")
+    .split("\n")
+    .map((line) => (line.startsWith("## ") ? `### ${line.slice(3)}` : line.startsWith("# ") ? `## ${line.slice(2)}` : line))
+    .join("\n");
+}
+
+export interface GoalResultsSummarySources {
+  comments: number;
+  directive: boolean;
+  attempts: number;
+  results_files: number;
+  events: number;
+}
+
+interface GoalResultsSummaryBuild {
+  body: string;
+  sources: GoalResultsSummarySources;
+  source_hash: string;
+}
+
+/**
+ * 由目标历史**零 LLM** 拼装 `results.md` 正文（结论 / 判据达成 / 证据引用 / 关键决策 / 时间线 / 来源）。
+ *
+ * 数据源全部来自 `goalDetail(root, goalId)` 的既有只读投影：评论、最近指令、attempt 记录、
+ * attempt 结果文件（`results-att-*.md`）与事件流。**不做任何语义判断**（判据是否达成只如实转述
+ * goal.md 里的 `✅已验` 标记），因此不受 LLM 参与、也不可能引入 token 成本。
+ */
+function buildGoalResultsSummary(detail: Record<string, any>, generatedAt: string): GoalResultsSummaryBuild {
+  const meta = (detail?.meta ?? {}) as Record<string, any>;
+  const comments = Array.isArray(detail?.comments) ? detail.comments : [];
+  const attempts = Array.isArray(detail?.attempts) ? detail.attempts : [];
+  const resultsFiles = Array.isArray(detail?.results?.attempts) ? detail.results.attempts : [];
+  const archives = Array.isArray(detail?.results?.archives) ? detail.results.archives : [];
+  const events = Array.isArray(detail?.events) ? detail.events : [];
+  // 自指噪声：摘要**自身**的生成事件（goal.results_summary_written/_skipped）不进时间线与计数，
+  // 否则「每次刷新都会改变下一份摘要的正文」⇒ source_hash 永不稳定、且内容自我污染。
+  const visibleEvents = events.filter((e: any) => !String(e?.event ?? "").startsWith("goal.results_summary_"));
+  const criteria = Array.isArray(detail?.criteria_items) ? detail.criteria_items : [];
+  const directive = typeof detail?.directive === "string" && detail.directive.trim() ? detail.directive.trim() : null;
+  const goalId = oneLine(meta.id) || "?";
+  const title = oneLine(meta.title) || "(无标题)";
+
+  const lines: string[] = [];
+
+  // ---- 结论 ----
+  lines.push("## 结论", "");
+  lines.push(`- 目标：${title}（\`${goalId}\`；type=${oneLine(meta.type) || "task"}；status=${oneLine(meta.status) || "?"}${meta.version ? `；version=${oneLine(meta.version)}` : ""}）`);
+  if (meta.blocked_reason) lines.push(`- 阻塞原因：${oneLine(meta.blocked_reason)}`);
+  const dist: Record<string, number> = {};
+  for (const a of attempts) {
+    const k = `${oneLine(a?.result) || "?"}/${oneLine(a?.status_state) || "-"}`;
+    dist[k] = (dist[k] ?? 0) + 1;
+  }
+  lines.push(`- attempt：共 ${attempts.length}${attempts.length ? `（${Object.entries(dist).map(([k, v]) => `${k}×${v}`).join("，")}）` : ""}`);
+  const newest = resultsFiles.length > 0 ? resultsFiles[0] : null;
+  const newestLine = newest ? goalResultsFirstLine(newest.body) : null;
+  lines.push(`- 最近交付：${newestLine ? `${newestLine}（来源 \`${basename(String(newest.file ?? ""))}\`）` : "（无可截获的子代理输出）"}`);
+
+  // ---- 判据达成 ----
+  lines.push("", "## 判据达成", "");
+  if (criteria.length === 0) {
+    lines.push("（目标未登记质量判据）");
+  } else {
+    const verified = criteria.filter((c) => isCriterionVerified(String(c))).length;
+    lines.push(`共 ${criteria.length} 条，其中带 \`✅已验\` 标记的 ${verified} 条（标记如实转述 goal.md「质量判据」小节原文；本工具不做语义判定）。`, "");
+    for (const c of criteria) lines.push(`- ${isCriterionVerified(String(c)) ? "✅" : "⬜"} ${oneLine(c)}`);
+  }
+
+  // ---- 证据引用 ----
+  lines.push("", "## 证据引用", "");
+  if (attempts.length === 0) {
+    lines.push("（无 attempt 记录）");
+  } else {
+    for (const a of attempts) {
+      const wt = a?.worktree && typeof a.worktree === "object" ? a.worktree : null;
+      const bits = [`attempt=\`${oneLine(a?.id) || "?"}\``, `executor=${oneLine(a?.executor) || "?"}`, `result=${oneLine(a?.result) || "?"}`];
+      if (a?.status_state) bits.push(`state=${oneLine(a.status_state)}`);
+      if (wt?.head) bits.push(`commit=${oneLine(wt.head).slice(0, 12)}`);
+      if (a?.baseline_commit) bits.push(`baseline=${oneLine(a.baseline_commit)}`);
+      lines.push(`- ${bits.join("；")}`);
+      const rf = resultsFiles.find((r: any) => oneLine(r?.attempt) === oneLine(a?.id));
+      lines.push(rf
+        ? `  - 完成摘要文件：\`${basename(String(rf.file ?? ""))}\`（source=${oneLine(rf.source) || "?"}；bytes=${Number(rf.bytes) || 0}；truncated=${rf.truncated ? "true" : "false"}；placeholder=${rf.placeholder ? "true" : "false"}；generated_at=${oneLine(rf.generated_at) || "?"}）`
+        : "  - 完成摘要文件：（无）");
+    }
+  }
+  const eventCounts: Record<string, number> = {};
+  for (const e of visibleEvents) {
+    const name = oneLine(e?.event);
+    if (name.includes("results")) eventCounts[name] = (eventCounts[name] ?? 0) + 1;
+  }
+  lines.push(`- 事件留痕：${Object.entries(eventCounts).map(([k, v]) => `${k}×${v}`).join("，") || "（投影窗口内无 results 事件）"}`);
+
+  // ---- 关键决策 ----
+  lines.push("", "## 关键决策", "");
+  lines.push("### 最近指令", "");
+  lines.push(directive ? truncateChars(demoteHeadings(directive), GOAL_RESULTS_DIRECTIVE_MAX_CHARS) : "（无最近指令）");
+  lines.push("", `### 评论与反馈（共 ${comments.length} 条）`, "");
+  if (comments.length === 0) {
+    lines.push("（无评论）");
+  } else {
+    for (const c of comments) {
+      lines.push(`- ${oneLine(c?.ts) || "?"}｜${oneLine(c?.author) || "?"}：${truncateChars(oneLine(c?.text), GOAL_RESULTS_COMMENT_MAX_CHARS)}`);
+    }
+  }
+
+  // ---- 时间线 ----
+  lines.push("", "## 时间线", "");
+  if (visibleEvents.length === 0) {
+    lines.push("（无事件）");
+  } else {
+    const timeline = visibleEvents.slice(-GOAL_RESULTS_TIMELINE_MAX);
+    if (visibleEvents.length > timeline.length) {
+      lines.push(`（只列最近 ${timeline.length} 条；本次投影窗口共 ${visibleEvents.length} 条）`, "");
+    }
+    for (const e of timeline) {
+      const digest = goalResultsEventDigest(e?.details);
+      lines.push(`- ${oneLine(e?.ts) || "?"}｜${oneLine(e?.actor) || "?"}｜${oneLine(e?.event) || "?"}${digest ? `｜${digest}` : ""}`);
+    }
+  }
+
+  // ---- 来源（判据 4 要求的「来源节」+ 生成时间）----
+  // 注意：本节点在 `source_hash` 之外（含生成时间与归档清单，逐次必然变化），
+  // 因此 source_hash 只代表**历史状态**（评论/指令/attempt/结果文件/事件），可用于「摘要是否已过时」判定。
+  const sourceSectionIndex = lines.length;
+  lines.push("", "## 来源", "");
+  lines.push(`- 生成时间：${generatedAt}（零 LLM 拼装；不含任何会话或模型调用）`);
+  lines.push(`- goal.md：\`${oneLine(detail?.goalFile)}\``);
+  lines.push(`- 评论：${comments.length} 条；最近指令：${directive ? "有" : "无"}；attempt：${attempts.length} 个；完成摘要文件：${resultsFiles.length} 份；事件（投影窗口，不含摘要自身生成事件）：${visibleEvents.length} 条`);
+  lines.push(`- 历史归档：${archives.length > 0 ? archives.map((n: unknown) => `\`${oneLine(n)}\``).join("、") : "（无）"}`);
+
+  // source_hash 覆盖「历史状态」各节（不含来源节）⇒ 同一历史状态重复刷新得到同一指纹。
+  const sourceHash = createHash("sha1").update(`${lines.slice(0, sourceSectionIndex).join("\n")}\n`, "utf8").digest("hex");
+  const body = `${lines.join("\n")}\n`;
+  const sources: GoalResultsSummarySources = {
+    comments: comments.length,
+    directive: directive !== null,
+    attempts: attempts.length,
+    results_files: resultsFiles.length,
+    events: visibleEvents.length,
+  };
+  return { body, sources, source_hash: sourceHash };
+}
+
+/** `results.md` 全文（机器头 + 覆盖说明 + 规范化正文）。 */
+function renderGoalResultsSummary(
+  h: {
+    generated_at: string; goal: string; title: string; status: string; actor: string;
+    sources: GoalResultsSummarySources; source_hash: string;
+    truncated: boolean; bytes: number; original_bytes: number;
+  },
+  body: string,
+  archiveName: string | null,
+): string {
+  const head = [
+    RESULTS_HEADER_BEGIN,
+    "kind: summary",
+    `generated_at: ${sanitizeResultsHeaderValue(h.generated_at)}`,
+    `goal: ${sanitizeResultsHeaderValue(h.goal)}`,
+    `title: ${sanitizeResultsHeaderValue(h.title)}`,
+    `status: ${sanitizeResultsHeaderValue(h.status)}`,
+    `source: ${RESULTS_SOURCE_HISTORY}`,
+    `actor: ${sanitizeResultsHeaderValue(h.actor)}`,
+    `truncated: ${h.truncated ? "true" : "false"}`,
+    `sources: comments=${h.sources.comments} directive=${h.sources.directive ? "yes" : "no"} attempts=${h.sources.attempts} results_files=${h.sources.results_files} events=${h.sources.events}`,
+    `source_hash: ${sanitizeResultsHeaderValue(h.source_hash)}`,
+    `bytes: ${h.bytes}`,
+    `original_bytes: ${h.original_bytes}`,
+    RESULTS_HEADER_END,
+  ];
+  const notes = [
+    `> ⚠️ ${RESULTS_OVERWRITE_NOTE}（手工编辑会被覆盖）。`,
+    archiveName
+      ? `> 🗃️ 旧版已归档：\`${sanitizeResultsHeaderValue(archiveName)}\`（保留历史，不删不覆盖）。`
+      : "> 🗃️ 本次为首版（无旧版可归档）。",
+    "> 🤖 本摘要由目标历史（评论 / 最近指令 / attempt 与其结果文件 / 事件流）**零 LLM 拼装**；重建入口：目标弹窗「完成摘要」tab 的「更新摘要」按钮或 `graph_refresh_results`。",
+  ];
+  if (h.truncated) notes.push(`> ✂️ 已截断：原始 ${h.original_bytes} 字节，仅保留前 ${h.bytes} 字节。`);
+  return `${head.join("\n")}\n\n${notes.join("\n")}\n\n## 完成摘要（规范化）：${sanitizeResultsHeaderValue(h.title) || sanitizeResultsHeaderValue(h.goal)}\n\n${body}\n`;
+}
+
+export interface GoalResultsWriteResult {
+  goal: string;
+  written: boolean;
+  skipped: boolean;
+  file: string;
+  /** 本次写入前归档的旧版文件名（无旧版 ⇒ null）。 */
+  archive: string | null;
+  bytes: number;
+  original_bytes: number;
+  truncated: boolean;
+  generated_at: string;
+  source_hash: string | null;
+  reason: string | null;
+  sources: GoalResultsSummarySources | null;
+}
+
+/**
+ * g-374 F2：从目标历史**零 LLM** 重写 `<goalDir>/results.md`（旧版先归档，绝不就地覆盖丢失）。
+ *
+ * 契约（写死，勿改）：
+ * - 路径唯一真源 = {@link goalResultsSummaryFile}；旧版归档唯一真源 = {@link goalResultsArchiveFile}
+ *   （`results-archive-YYYYMMDDTHHMMSS.md`，可枚举、被 attempt 结果投影正则排除）；
+ * - **重复调用 = 每次重写 + 每次归档**（「重新摘要」的语义就是重新生成；不做内容相同短路，
+ *   因此每次调用都留下可审计的归档；同秒冲突追加 `-2`/`-3`…）；
+ * - 归档是写入的**前置条件**：归档失败 ⇒ 事务失败，宁可不写新版也不丢历史；
+ * - 事件先行：`goal.results_summary_written` / `goal.results_summary_skipped`（含 bytes/source_hash/归档名）；
+ * - 优雅空态：目标**无评论、无最近指令、无 attempt** ⇒ 不写空文件、不归档、不抛错，返回 `skipped`；
+ * - 全程零 LLM：只做文件与事件拼装，**不产生任何会话/模型调用**；
+ * - 本函数**永不抛出**：任何失败都返回 `{written:false, skipped:true, reason}`。
+ */
+export function refreshGoalResults(
+  root: string,
+  goalId: string,
+  opts: { actor?: string; maxBytes?: number; stamp?: string } = {},
+): GoalResultsWriteResult {
+  const fail = (reason: string, file = "", extra: Partial<GoalResultsWriteResult> = {}): GoalResultsWriteResult => ({
+    goal: typeof goalId === "string" ? goalId : "", written: false, skipped: true, file, archive: null,
+    bytes: 0, original_bytes: 0, truncated: false, generated_at: "", source_hash: null,
+    reason, sources: null, ...extra,
+  });
+  try {
+    const id = typeof goalId === "string" ? goalId.trim() : "";
+    if (!root) return fail("no-root");
+    if (!id) return fail("invalid-goal");
+    const goalFile = findGoalFile(root, id);
+    if (basename(goalFile) !== "goal.md") return fail("backlog-goal-no-dir");
+    const file = goalResultsSummaryFile(goalFile);
+    const actor = typeof opts.actor === "string" && opts.actor.trim()
+      ? sanitizeResultsHeaderValue(opts.actor)
+      : "system:results-summary";
+    const maxBytes = Number.isFinite(Number(opts.maxBytes)) && Number(opts.maxBytes) > 0
+      ? Math.floor(Number(opts.maxBytes))
+      : GOAL_RESULTS_MAX_BYTES;
+    const generatedAt = nowIsoMs();
+    const detail = goalDetail(root, id);
+    const meta = (detail?.meta ?? {}) as Record<string, any>;
+    const built = buildGoalResultsSummary(detail, generatedAt);
+    if (built.sources.comments === 0 && !built.sources.directive && built.sources.attempts === 0) {
+      // 优雅空态：来源为空 ⇒ 明确说明、不写空文件、不归档、不抛错（留一条 skipped 事件供审计）。
+      try {
+        appendEvent(root, {
+          actor, event: "goal.results_summary_skipped", goal: id,
+          details: { reason: "no-source", file, sources: built.sources, generated_at: generatedAt },
+        });
+      } catch { /* 忽略留痕失败 */ }
+      return fail("no-source", file, { generated_at: generatedAt, sources: built.sources });
+    }
+    const cut = truncateUtf8Bytes(built.body, maxBytes);
+    // 归档时间戳会进入**文件名**：只接受写死的 `YYYYMMDDTHHMMSS` 形状，其余一律回落到当前时间
+    // （防路径穿越/奇怪字符借文件名逃出目标目录；测试用显式 stamp 注入确定性时间）。
+    const stampRaw = typeof opts.stamp === "string" ? opts.stamp.trim() : "";
+    const stamp = /^\d{8}T\d{6}$/.test(stampRaw) ? stampRaw : resultsArchiveStamp();
+
+    const tx = withTx(
+      { root, actor, goal: id },
+      { lockName: "results-summary-" + id },
+      () => {
+        const hadOld = existsSync(file);
+        let archive: string | null = null;
+        if (hadOld) {
+          // 旧版必须先归档；失败即抛 ⇒ 事务失败、不写新版（绝不就地覆盖丢失历史）。
+          archive = goalResultsArchiveFile(goalFile, stamp);
+          atomicWrite(archive, readFileSync(file, "utf8"));
+        }
+        return {
+          value: { archive, hadOld, archiveError: null as string | null },
+          events: [{
+            actor, event: "goal.results_summary_written", goal: id,
+            details: {
+              file, archive, overwrite: hadOld, bytes: cut.bytes, original_bytes: cut.original_bytes,
+              truncated: cut.truncated, source_hash: built.source_hash, sources: built.sources,
+              actor_writer: actor, generated_at: generatedAt,
+            },
+          }],
+        };
+      },
+    );
+    if (!tx.ok) return fail(`tx-${tx.phase}: ${tx.error}`, file, { generated_at: generatedAt, sources: built.sources });
+    const content = renderGoalResultsSummary({
+      generated_at: generatedAt, goal: id, title: oneLine(meta.title), status: oneLine(meta.status), actor,
+      sources: built.sources, source_hash: built.source_hash,
+      truncated: cut.truncated, bytes: cut.bytes, original_bytes: cut.original_bytes,
+    }, cut.text, tx.value.archive);
+    // 事件已先行；本体写失败只补记失败事件，绝不抛出（不打断调用方）。
+    try {
+      atomicWrite(file, content);
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      try {
+        appendEvent(root, {
+          actor, event: "goal.results_summary_skipped", goal: id,
+          details: { reason: "write-failed: " + msg, file, archive: tx.value.archive, sources: built.sources },
+        });
+      } catch { /* 忽略 */ }
+      return fail("write-failed: " + msg, file, { archive: tx.value.archive, generated_at: generatedAt, sources: built.sources });
+    }
+    return {
+      goal: id, written: true, skipped: false, file, archive: tx.value.archive,
+      bytes: cut.bytes, original_bytes: cut.original_bytes, truncated: cut.truncated,
+      generated_at: generatedAt, source_hash: built.source_hash, reason: null, sources: built.sources,
+    };
+  } catch (e) {
+    return fail("error: " + String((e as Error)?.message ?? e));
   }
 }
 

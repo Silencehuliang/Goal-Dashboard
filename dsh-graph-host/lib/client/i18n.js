@@ -189,7 +189,7 @@
       'tab.openFailed': '⚠️ 打开失败：',
       'tab.pathCopiedNoOpen': '✅ 路径已复制（打开不可用）',
 
-      // === g-374：完成摘要只读 tab ===
+      // === g-374：完成摘要 tab（F1 展示 + F3-a 可直接点击的「更新摘要」动作）===
       'tab.results': '📝 完成摘要',
       'results.title': '📝 完成摘要',
       'results.summaryTitle': '📄 规范化摘要（results.md）',
@@ -200,7 +200,17 @@
       'results.placeholderBadge': '🧩 占位（无子代理输出）',
       'results.degradedBadge': '⚠️ 降级读取',
       'results.generatedAt': '写入时间',
-      'results.readOnlyNote': '本页只读；文件由机器生成，下次写入整体覆盖。',
+      'results.refresh': '🔄 更新摘要',
+      'results.refreshing': '⏳ 正在重写…',
+      'results.refreshHint': '从目标历史（评论 / 最近指令 / attempt 结果 / 事件流）重新生成 results.md，旧版自动归档保留；无需命令行或会话指令。',
+      'results.refreshOk': '✅ 摘要已更新',
+      'results.refreshArchived': '旧版已归档',
+      'results.refreshFirst': '首版（无旧版可归档）',
+      'results.refreshSkipped': '⏭️ 未生成（来源为空，不写空文件）',
+      'results.refreshFail': '❌ 更新失败：',
+      'results.refreshNoWorkspace': '⚠️ 当前会话未关联 workspace，无法更新摘要。',
+      'results.omittedNote': '⚠️ 因总量上限未下发的完成摘要文件数',
+      'results.writeNote': '本页可写：点「更新摘要」即按目标历史重写 results.md（旧版归档保留）；文件由机器生成，下次写入整体覆盖。',
 
       // === 目标描述段 ===
       'section.description': '📋 目标描述',
@@ -1231,7 +1241,7 @@
       'tab.openFailed': '⚠️ Failed to open: ',
       'tab.pathCopiedNoOpen': '✅ Path copied (open unavailable)',
 
-      // === g-374: read-only Results tab ===
+      // === g-374: Results tab (F1 display + F3-a clickable refresh action) ===
       'tab.results': '📝 Results',
       'results.title': '📝 Results',
       'results.summaryTitle': '📄 Normalized summary (results.md)',
@@ -1242,7 +1252,17 @@
       'results.placeholderBadge': '🧩 Placeholder (no subagent output)',
       'results.degradedBadge': '⚠️ Degraded read',
       'results.generatedAt': 'Generated',
-      'results.readOnlyNote': 'Read-only; files are machine-generated and overwritten on the next write.',
+      'results.refresh': '🔄 Refresh summary',
+      'results.refreshing': '⏳ Rewriting…',
+      'results.refreshHint': 'Regenerate results.md from goal history (comments, latest directive, attempt results, event stream); the previous version is archived automatically. No CLI or session command needed.',
+      'results.refreshOk': '✅ Summary updated',
+      'results.refreshArchived': 'previous version archived as',
+      'results.refreshFirst': 'first version (nothing to archive)',
+      'results.refreshSkipped': '⏭️ Not generated (no source history; no empty file written)',
+      'results.refreshFail': '❌ Refresh failed: ',
+      'results.refreshNoWorkspace': '⚠️ This session has no workspace, so the summary cannot be refreshed.',
+      'results.omittedNote': '⚠️ Result files omitted by the total size budget',
+      'results.writeNote': 'This tab is writable: clicking Refresh summary rewrites results.md from goal history (the previous version is archived); files are machine-generated and overwritten on the next write.',
 
       // === Sections ===
       'section.description': '📋 Goal Description',

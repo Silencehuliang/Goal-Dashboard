@@ -140,6 +140,7 @@ import {
   abandonAttempt,
   getCachedBoardPayload,
   writeAttemptResults,
+  refreshGoalResults,
   ATTEMPT_RESULTS_MAX_BYTES,
   versionGoals,
   backlogGoals,
@@ -1161,13 +1162,8 @@ export function apply(ctx, config) {
       childAttemptIndex.delete(oldest);
     }
   };
-  // Map miss 时的留痕看板根（插件自身 workspace 的 canonical root；解析不出时仅 stderr 留痕，绝不猜 attempt）。
-  const resultsFallbackRoot = (() => {
-    try {
-      const ws = ctx.get?.("sandboxPolicy")?.workspaceRoot;
-      return ws ? resolveCanonicalRoot(config, ws).root : null;
-    } catch { return null; }
-  })();
+  // Map miss 的留痕策略见 captureAttemptResults：**纯 stderr**，不写看板事件流
+  // （F1 复核注记③：对所有非 attempt 子代理记账 ⇒ 事件流噪声无界增长且不可归因）。
 
   /**
    * g-374：`subagent/end` 回调——**必须在事件回调侧完成截获与写入**。
@@ -1179,20 +1175,15 @@ export function apply(ctx, config) {
       const childId = typeof info?.id === "string" && info.id ? info.id : null;
       const entry = childId ? childAttemptIndex.get(childId) : null;
       if (!entry) {
-        // 宿主重启后冷恢复的 child / 非 executor 派发的 child：归属未知 ⇒ 不写文件、不猜归属。
-        try { console.warn(`[dsh-graph] g-374 subagent/end 未登记 child=${childId ?? "(none)"} —— 跳过完成摘要（不猜归属）`); } catch { /* 忽略 */ }
-        if (childId && resultsFallbackRoot) {
-          try {
-            appendEvent(resultsFallbackRoot, {
-              actor: "system:subagent/end",
-              event: "attempt.results_skipped",
-              details: {
-                child_id: childId, reason: "unmapped", source: "subagent/end", unmapped: true,
-                stop_reason: typeof info?.stopReason === "string" ? info.stopReason : null,
-              },
-            });
-          } catch { /* 忽略 */ }
-        }
+        // 宿主重启后冷恢复的 child / 非 executor 派发的 child（收集/spawn/普通子代理）：归属未知
+        // ⇒ 不写文件、不猜归属。
+        // g-374 F3（F1 复核注记③）：**降为纯 stderr**——此前对**所有**非 attempt 子代理都记
+        // `console.warn` + `attempt.results_skipped` 事件，事件流噪声无界增长；归属未知本就不可
+        // 归因到具体目标，写进看板事件流只会污染负责人看板。保留 stderr 便于诊断。
+        try {
+          const stop = typeof info?.stopReason === "string" ? info.stopReason : "?";
+          process.stderr.write(`[dsh-graph] g-374 subagent/end 未登记 child=${childId ?? "(none)"} stop=${stop} —— 跳过完成摘要（不猜归属，纯 stderr 留痕）\n`);
+        } catch { /* 忽略 */ }
         return;
       }
       if (info?.local === false) return; // 本项目只用 continuable 子代理（local 恒 true）
@@ -1862,6 +1853,79 @@ export function apply(ctx, config) {
         const r = rootFor(ex);
         appendGoalComment(r, a.goal, a.text, actorOf(ex));
         return { ok: true, goal: a.goal };
+      },
+    },
+    {
+      // g-374 F4：无子代理的轻量改动（chore/patch、一两行修改、文档/看板数据修订）必须也有结果面。
+      // 主管自己做完成摘要 ⇒ 与 F1 自动截获**同一写入器**（同格式/同路径/同覆盖策略），零 LLM 调用。
+      def: {
+        name: "graph_write_results",
+        description: "写入一次 attempt 的完成摘要（<goalDir>/results-att-<attempt>.md）：供主管/用户在**无子代理**的轻量改动（chore/patch、一两行修改、文档或看板数据修订）后主动补写结果，避免结果真空。与自动截获同一写入器/同一格式/同一路径；文件头标注 source（默认 manual）与写入者。零 LLM 调用（纯文本落盘）。同一 attempt 重复调用 = last-wins 覆盖同一文件（每次写入都追加 attempt.results_written 事件）。",
+        parameters: params({ goal: str, attempt: str, text: str, source: str, actor: str }, ["goal", "attempt", "text"]),
+      },
+      run: (a, ex) => {
+        if (!a.goal || !a.attempt) throw new GraphError("graph_write_results 缺参：需要 goal/attempt/text");
+        if (typeof a.text !== "string" || !a.text.trim()) throw new GraphError("graph_write_results：text 不能为空（空文本请改用自动截获的占位路径）");
+        const r = rootFor(ex);
+        // 一一对应不变式（判据 3）：`results-<attempt>.md` 只对**真实存在的 attempt** 写入，
+        // 不制造孤儿结果文件；无 attempt 的轻量改动走 graph_refresh_results（results.md）。
+        const goalFile = findGoalFile(r, a.goal);
+        if (basename(goalFile) !== "goal.md") throw new GraphError(`暂存目标（backlog）没有目标目录，无法写完成摘要：${a.goal}`);
+        if (!existsSync(join(dirname(goalFile), "attempts", a.attempt, "attempt.md"))) {
+          throw new GraphError(`attempt 不存在：${a.goal}/${a.attempt}（不制造孤儿结果文件）；无 attempt 的轻量改动请用 graph_refresh_results 刷新 results.md`);
+        }
+        const res = writeAttemptResults(r, {
+          goal: a.goal,
+          attempt: a.attempt,
+          source: typeof a.source === "string" && a.source.trim() ? a.source : "manual",
+          childId: null,
+          stopReason: null,
+          text: a.text,
+          actor: typeof a.actor === "string" && a.actor.trim() ? a.actor : actorOf(ex),
+        });
+        if (!res.written) throw new GraphError(`graph_write_results 写入失败：${res.reason ?? "unknown"}`);
+        return { ok: true, ...res };
+      },
+    },
+    {
+      // g-374 F2/F3：从目标历史零 LLM 重写 results.md（旧版归档）+ 批量。UI「更新摘要」按钮走同一实现。
+      def: {
+        name: "graph_refresh_results",
+        description: "从目标历史（评论 / 最近指令 / attempt 与其结果文件 / 事件流）**零 LLM** 重写 <goalDir>/results.md（规范化完成摘要：结论 + 判据达成 + 证据引用 + 关键决策 + 时间线 + 来源）；旧版先归档为 results-archive-YYYYMMDDTHHMMSS.md（保留历史，不删不覆盖），每次调用都重写 + 归档。支持单目标（goal）与批量（goals[]），批量逐目标报告写入/跳过/失败原因，单目标失败不中断整批；目标无评论/无指令/无 attempt 时优雅跳过（不写空文件）。**主管自做 chore/patch 等无子代理改动后应主动调用**。",
+        parameters: params({ goal: str, goals: strArr, actor: str }, []),
+      },
+      run: (a, ex) => {
+        const list = [];
+        if (typeof a.goal === "string" && a.goal.trim()) list.push(a.goal.trim());
+        if (Array.isArray(a.goals)) for (const g of a.goals) if (typeof g === "string" && g.trim()) list.push(g.trim());
+        const targets = [...new Set(list)];
+        if (targets.length === 0) throw new GraphError("graph_refresh_results 缺参：需要 goal（单目标）或 goals[]（批量）");
+        const r = rootFor(ex);
+        const actor = typeof a.actor === "string" && a.actor.trim() ? a.actor.trim() : actorOf(ex);
+        // 逐目标独立：任一目标失败/跳过都不影响其余目标（批量可审计）。
+        const items = targets.map((g) => {
+          try {
+            const res = refreshGoalResults(r, g, { actor });
+            const reason = String(res.reason ?? "");
+            const status = res.written
+              ? "written"
+              : (/^(error|tx-|write-failed)/.test(reason) ? "failed" : "skipped");
+            return {
+              goal: g, ok: res.written, status,
+              file: res.file, archive: res.archive, reason: res.reason,
+              bytes: res.bytes, truncated: res.truncated, source_hash: res.source_hash,
+              generated_at: res.generated_at, sources: res.sources,
+            };
+          } catch (e) {
+            return { goal: g, ok: false, status: "failed", file: "", reason: String(e?.message ?? e) };
+          }
+        });
+        const count = (s) => items.filter((i) => i.status === s).length;
+        return {
+          ok: count("failed") === 0, total: items.length,
+          written: count("written"), skipped: count("skipped"), failed: count("failed"),
+          items,
+        };
       },
     },
     {
@@ -2634,6 +2698,26 @@ export function apply(ctx, config) {
           json(res, 200, detail);
         } catch (e) {
           json(res, 404, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-374 F2/F3：从目标历史零 LLM 重写 results.md（旧版归档）。
+    // 与 `graph_refresh_results` 工具**共用同一个 core 实现**（路径/归档/空态策略唯一真源）；
+    // 仅供 GUI「完成摘要」tab 的「更新摘要」按钮调用，无需用户去命令行或会话下指令。
+    {
+      path: "/api/dsh-graph/refresh-results",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal } = body;
+          if (!goal || typeof goal !== "string") return json(res, 400, { error: "missing goal" });
+          const result = refreshGoalResults(rootForReq(req, body), goal, { actor: "human:gui" });
+          // written=false 不是 HTTP 错误（空态/已跳过都是可预期的业务结果），由前端按 reason 显示。
+          json(res, 200, { ok: result.written, ...result });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },

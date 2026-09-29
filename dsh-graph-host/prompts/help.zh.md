@@ -1,4 +1,4 @@
-dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具（共 47 个）：
+dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具（共 49 个）：
 
 ## 目标生命周期
 - graph_create_goal(title[, version][, type]) 建目标（进 backlog，带 version 则排期；type 可选 feature/bug/task/improvement/patch/chore）；
@@ -17,6 +17,8 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_set_goal_type(goal, type) 设置类型 feature/bug/task/improvement/patch/chore；
 - graph_move_goal(goal, to[, version]) 移动目标：backlog ↔ 独立 goals/ ↔ 版本；
 - graph_add_comment(goal, text) 追加评论/反馈到 Comments 小节。
+- graph_write_results(goal, attempt, text[, source][, actor]) 人工写入一次 attempt 的完成摘要（默认 source=manual + 写入者标注）；**主管自做 chore/patch 等无子代理改动、或 attempt 未截获到输出时须主动补写**（零 LLM 调用，与自动截获同格式/同路径/同覆盖策略）；
+- graph_refresh_results([goal][, goals][, actor]) 从目标历史零 LLM 重写 results.md（结论/判据达成/证据引用/关键决策/时间线/来源），旧版自动归档为 results-archive-YYYYMMDDTHHMMSS.md；支持单目标与批量 goals[]，逐目标报告写入/跳过/失败。
 
 ## 判据·卡片·附件
 - graph_set_criteria(goal, criteria[]) 先登记质量判据（判据先于执行，硬规则）；
@@ -63,7 +65,7 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_update_settings(patch) 更新项目配置（schema 校验、保留注释、原子写）。
 
 ## 帮助
-- graph_help() 显示本帮助（全部 47 个工具清单与参数速查）。
+- graph_help() 显示本帮助（全部 49 个工具清单与参数速查）。
 
 ## 接管 supervisor
 **仅在负责人明确要求你接管 supervisor 时执行**——默认任何会话都不得自动 claim：

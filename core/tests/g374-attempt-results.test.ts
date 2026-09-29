@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   init,
   createGoal,
@@ -94,8 +94,28 @@ test("g-374 F1：正常输出落盘——<goalDir>/results-att-001.md 命名 + �
   assert.equal(d.overwrite, false);
   assert.equal(d.file, res.file);
 
-  // 原子写不留半文件
-  assert.deepEqual(readdirSync(dir).filter((n) => n.startsWith(".tmp-")), [], "不得残留 temp 半文件");
+  // 原子写不留半文件（F1 复核 must-fix①：原断言只查 `.tmp-*` 前缀，而 atomicWrite 的真实临时名是
+  // `<目标文件>.tmp.<pid>`（core/transaction.ts:180）⇒ 该断言恒真（vacuous）。这里改为钉住**真实**
+  // 临时名，并保留「任何 *.tmp.* 残留」的广义检查；反恒真对照见下方「断言非恒真」用例。
+  const realTmp = `${res.file}.tmp.${process.pid}`;
+  assert.equal(existsSync(realTmp), false, `原子写不得残留真实临时文件 ${basename(realTmp)}`);
+  assert.deepEqual(readdirSync(dir).filter((n) => n.includes(".tmp.")), [], "不得残留任何 *.tmp.* 半文件");
+});
+
+test("g-374 F1：原子写残留断言**非恒真**（must-fix① 反恒真对照：造出真实临时名即必红）", () => {
+  const { root, goal, attempt, dir } = setup();
+  const res = writeAttemptResults(root, { goal, attempt, source: "subagent/end", stopReason: "completed", text: "x" });
+  const realTmp = `${res.file}.tmp.${process.pid}`;
+  // 人为造出「atomicWrite 会留下的那种半文件」，判定函数必须能看见它（否则断言与实现不同名 = 恒真）。
+  writeFileSync(realTmp, "半文件");
+  try {
+    assert.equal(existsSync(realTmp), true);
+    assert.notDeepEqual(readdirSync(dir).filter((n) => n.includes(".tmp.")), [], "残留检查必须能命中真实临时名");
+    assert.ok(readdirSync(dir).includes(basename(realTmp)), "临时名写法与 atomicWrite 逐字一致");
+  } finally {
+    rmSync(realTmp, { force: true });
+  }
+  assert.deepEqual(readdirSync(dir).filter((n) => n.includes(".tmp.")), [], "对照后必须清干净");
 });
 
 test("g-374 F1：goalDetail 新增只读 results 字段（不改 board 缓存；attempt 倒序）", () => {
@@ -246,7 +266,9 @@ test("g-374 F1：截断——默认 64 KiB、不切坏多字节字符、文件�
   const ev = resultsEvents(root, "attempt.results_written")[0].details;
   assert.equal(ev.truncated, true, "事件标注截断");
   assert.equal(ev.original_bytes, Buffer.byteLength(body, "utf8"));
-  assert.deepEqual(readdirSync(dir).filter((n) => n.startsWith(".tmp-")), []);
+  // must-fix①：与实现同名的真实临时名 + 广义残留检查（原 `.tmp-*` 前缀断言与实际命名不符 = 恒真）
+  assert.equal(existsSync(`${join(dir, `results-${attempt}.md`)}.tmp.${process.pid}`), false, "不得残留真实临时文件");
+  assert.deepEqual(readdirSync(dir).filter((n) => n.includes(".tmp.")), [], "不得残留任何 *.tmp.* 半文件");
 });
 
 // ============================================================================
@@ -321,9 +343,12 @@ test("g-374 F1：goalResults 只读投影——倒序、results.md、缺失/损�
   const huge = r.attempts.find((a) => a.attempt === "att-004")!;
   assert.equal(huge.degraded, "oversized", "超大文件降级而非抛错");
   assert.equal(huge.attempt, "att-004");
+  // g-374 F2：历史归档可列举（且不被当作 attempt 结果文件）；总量预算未触发时 omitted=0
+  assert.deepEqual(r.archives, ["results-archive-20260101T000000.md"], "归档可枚举（唯一真源正则）");
+  assert.equal(r.omitted, 0, "总量预算内不得削减下发");
 
   // 目标不存在 ⇒ 空投影，不抛错
-  assert.deepEqual(goalResults(root, "g-does-not-exist"), { summary: null, attempts: [] });
+  assert.deepEqual(goalResults(root, "g-does-not-exist"), { summary: null, attempts: [], omitted: 0, archives: [] });
 });
 
 // ============================================================================
