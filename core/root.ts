@@ -16,20 +16,20 @@
  * 是否处于 Git linked worktree，若是则归一到主工作树的 canonical graph root。
  * 显式绝对 config.root 不做 Git 发现（管理员覆盖）；Git 发现失败时安全回退到普通 resolveRoot。
  *
- * g-363 修正（判定基准 + scratch 边界）：
- * 1) 「是否 linked worktree」必须以**包含 workspace 的工作树根**（`git rev-parse --show-toplevel`）
- *    为基准判定，而不是 workspace 路径本身。旧判定 `realpath(workspace) !== realpath(mainWorktree)`
- *    让主工作树的**任意子目录**（仓库内 `tmp/` 下的测试夹具、隔离实例 workspace）都被当成
- *    linked worktree 并归一到真实看板 —— 实测三个出口：测试夹具写生产 project.yaml/事件流、
- *    隔离实例写生产 memory.jsonl、linked worktree 内跑全量 47 条假红。
- * 2) 工作树内**被 git 忽略**的子目录（`git check-ignore`）不算该仓库的项目内容，一律当作
- *    **独立项目根**（`isScratchWorkspace`）：不做 canonicalization、不归属外层仓库的代码工作树、
- *    干净度探测不可判。理由：仓库内 `tmp/`（`.gitignore` 的 `/tmp/`）是 AGENTS.md 指定的
- *    临时/隔离区（隔离实例 workspace 亦在其中），它必须是一个可写的**独立看板**，
- *    而不是真实看板的别名（与 mem-73f84ba7 的相容方式见 docs/dev-instance-guide.md）。
+ * g-363 修正（只加 **scratch 边界**；判定基准**有意保持旧语义**——主管裁决 (a)）：
+ * 1) 「是否 linked worktree」仍是 `realpath(workspace) !== realpath(mainWorktree)`：仓库内
+ *    **被跟踪**的子目录（`core/`、`docs/` 等）照旧归一到该项目所属主工作树的看板，g-149 语义逐字不变。
+ * 2) 工作树内**被 git 忽略**的子目录（`git check-ignore`，索引感知）**且不是工作树根自身**，
+ *    不算该仓库的项目内容，一律当作 **独立项目根**（`isScratchWorkspace`）：不做 canonicalization、
+ *    不归属外层仓库的代码工作树、干净度探测不可判。
+ *    这一条就消除了旧实现的三个污染出口（实测）：仓库内 `tmp/` 下的测试夹具写生产
+ *    project.yaml/事件流、隔离实例 workspace（`tmp/dsh-test/<版本>/workspace`）写生产 memory.jsonl、
+ *    linked worktree 内跑全量 47 条假红。理由：仓库内 `tmp/`（`.gitignore` 的 `/tmp/`）是 AGENTS.md
+ *    指定的临时/隔离区，它必须是一个可写的**独立看板**，而不是真实看板的别名
+ *    （与 mem-73f84ba7 的相容方式见 docs/dev-instance-guide.md）。
  */
-import { resolve, relative, isAbsolute } from "node:path";
-import { execSync } from "node:child_process";
+import { resolve, relative, isAbsolute, sep } from "node:path";
+import { execSync, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
 
 /** Default TTL for canonical root / git worktree cache: 30 seconds. */
@@ -106,12 +106,12 @@ export interface GitWorktreeInfo {
   worktreeRoot: string;
   /**
    * Whether `workspace` belongs to a Git **linked worktree** (a real `git worktree add`
-   * tree). g-363: judged by the containing `worktreeRoot`, not by `workspace` itself —
-   * the old `workspace !== mainWorktree` test marked every subdirectory of the main
-   * worktree as "linked" and canonicalized it onto the real board.
+   * tree) or to any subdirectory of one.
    *
-   * Git-ignored scratch directories never appear here at all: `discoverGitWorktree`
-   * returns null for them (see {@link isScratchWorkspace}).
+   * g-363（主管裁决 (a)）：判据**有意保持旧语义** `workspace !== mainWorktree` ——
+   * 仓库内**被跟踪**的子目录因此仍归一到该项目主工作树的看板（g-149 逐字不变）。
+   * 仓库内**被 git 忽略**的子目录不再走这里：它们是 scratch，`discoverGitWorktree`
+   * 直接返回 null（见 {@link isScratchWorkspace}），污染出口由 scratch 边界消除。
    */
   isLinkedWorktree: boolean;
 }
@@ -129,9 +129,12 @@ export interface CanonicalRootOptions {
   ttlMs?: number;
 }
 
-/** Custom runner for git exec commands (overridable in tests/mocking). */
+/** Custom runner for git exec commands (overridable in tests/mocking).
+ *  g-363：带路径参数的命令一律走 `execFileSync` 的**参数数组**签名 —— 不经 shell，
+ *  Windows 上不会出现「单引号不被 cmd.exe 剥离」而把引号当路径字符的问题。 */
 export const _gitRunner = {
   execSync: (cmd: string, options: any) => execSync(cmd, options),
+  execFileSync: (file: string, args: string[], options: any) => execFileSync(file, args, options),
 };
 
 /** Safe realpath: falls back to the lexical path when the target does not exist. */
@@ -144,21 +147,38 @@ function safeRealpath(p: string): string {
 }
 
 /**
+ * g-363: 生成 `git check-ignore` 的**参数数组**（纯函数，便于平台无关的字符级守卫）。
+ *
+ * - 路径一律用 `/` 分隔：`relative()` 在 Windows 上产出 `\`，匹配不上 `.gitignore` 里按 `/`
+ *   写的规则，故用 `sep` 归一（仅在 Windows 上做转换，避免把 POSIX 文件名里的 `\` 误当分隔符）。
+ * - 带尾斜杠：调用方只传**目录**，而「目录专用」忽略规则（如 `.gitignore` 里的 `tmpdata/`）
+ *   对尚不存在的路径不匹配 —— 带尾斜杠让 `tmp/…` 这类规则在目录尚未创建时也能命中。
+ * - 参数里**不得出现引号字符**：调用方用数组签名（不经 shell）传参，引号只会变成路径的一部分。
+ *
+ * @returns 参数数组；路径越界（工作树外）时返回 null。
+ */
+export function checkIgnoreArgv(worktreeRoot: string, target: string): string[] | null {
+  const rel = relative(worktreeRoot, target);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;
+  const relPosix = sep === "\\" ? rel.split(sep).join("/") : rel;
+  return ["check-ignore", "-q", "--", `${relPosix}/`];
+}
+
+/**
  * g-363: 判断 `target` 是否是 `worktreeRoot` 内**被 git 忽略**的路径。
  *
  * 语义：git-ignored 的内容不属于该仓库的项目内容（scratch/本地数据）。判定走
  * `git check-ignore`（默认索引感知：已跟踪的路径即使匹配 ignore 规则也报告「未忽略」），
  * 故「已跟踪的子目录」仍视作项目内容。
- * 路径带尾斜杠：调用方只传**目录**，而「目录专用」忽略规则（如 `.gitignore` 里的 `tmpdata/`）
- * 对尚不存在的路径不匹配 —— 带尾斜杠让 `tmp/…` 这类规则在目录尚未创建时也能命中。
+ * 命令用 `_gitRunner.execFileSync` 的数组签名（不经 shell）—— 见 {@link checkIgnoreArgv}。
  * 任何失败（git 不可用、路径越界）都返回 false —— 保守地按「非 scratch」处理，
  * 避免把正常项目误判成独立项目。
  */
 function isIgnoredInsideWorktree(worktreeRoot: string, target: string): boolean {
-  const rel = relative(worktreeRoot, target);
-  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return false;
+  const argv = checkIgnoreArgv(worktreeRoot, target);
+  if (!argv) return false;
   try {
-    _gitRunner.execSync(`git check-ignore -q -- '${rel.replaceAll("'", `'\\''`)}/'`, {
+    _gitRunner.execFileSync("git", argv, {
       cwd: worktreeRoot,
       timeout: 5000,
       stdio: ["pipe", "pipe", "pipe"],
@@ -246,7 +266,9 @@ function probeGitWorktree(
           mainWorktree: resolvedMain,
           workspace: resolvedWorkspace,
           worktreeRoot,
-          isLinkedWorktree: worktreeRoot !== resolvedMain,
+          // 裁决 (a)：判据保持旧语义（workspace 自身 vs 主工作树）。仓库内**被跟踪**子目录
+          // 照旧归一；污染出口只由上面的 scratch 边界消除。
+          isLinkedWorktree: resolvedWorkspace !== resolvedMain,
         },
         isScratch,
       };

@@ -14,13 +14,21 @@
  * 同一根因还让 `listWorktrees`/`prepareAttemptWorktree` 把 scratch 夹具的代码工作树解析成真实
  * 仓库 ⇒ 在真实仓库里注册 `.worktrees/g-001-att-01` 之类的夹具残留（污染可累积）。
  *
+ * 修法（**主管裁决 (a)**：只加 scratch 边界，判定基准保持 g-149 旧语义 —— 见 core/root.ts 头注）：
+ * 工作树内**被 git 忽略**的子目录（`git check-ignore`，索引感知）且不是工作树根自身 ⇒
+ * scratch = 独立项目根（`isScratchWorkspace()`；`discoverGitWorktree()` 对它返回 null）。
+ * 仓库内**被跟踪**子目录与工作树根的行为**逐字不变**。
+ *
  * 断言面：
- *  A. 判定基准（根因）：linked worktree 判定基于**包含 workspace 的工作树根**，主工作树的普通
- *     子目录不再被判为 linked；被忽略的 scratch 子目录由 `isScratchWorkspace` 显式标记。
+ *  A1. 契约：被跟踪子目录仍归一到项目看板（g-149 逐字不变）／被忽略子目录 = 独立项目根／
+ *      主树根与真 linked worktree 根字节级同前。
+ *  A2. 传参形状（字符级、平台无关）：`git check-ignore` 走**参数数组**（不经 shell）⇒ 参数里
+ *      不得出现引号字符、路径必须以 `/` 分隔 —— Windows 上 `execSync` 字符串形式会因 cmd.exe
+ *      不剥离单引号、`relative()` 产出 `\` 而恒判「未忽略」（scratch 判定失效 ⇒ 三个出口回归）。
  *  B. 不变量（负向对照，本套件的核心）：把夹具**真的写一遍**（init + createGoal +
  *     writeProjectConfig + listWorktrees + prepareAttemptWorktree），真实看板/真实 worktree
  *     注册表必须一字不沾 —— 断言用本次唯一的 marker 定位，对并发写看板免疫；
- *     把修复回退（判定基准改回 workspace 自身、去掉 scratch 边界）⇒ 本套件必红。
+ *     撤掉 scratch 边界 ⇒ 本套件必红（见 docs/dev-instance-guide.md §4.1 的实测数字）。
  *  C. 不误伤：linked worktree **根**（`.worktrees/` 被 ignore）仍归一到主工作树；
  *     被跟踪的子目录仍按其工作树项目解析；只有被忽略的子目录才隔离。
  *  D. 干净度：scratch 目录的 `git status` 说的是**外层仓库**的干净度 ⇒ 必须报 unknown，不伪称干净。
@@ -36,6 +44,7 @@ import { join, resolve } from "node:path";
 import { createGoal, init, writeProjectConfig } from "../ops.ts";
 import {
   _clearCanonicalRootCache,
+  checkIgnoreArgv,
   discoverGitWorktree,
   isScratchWorkspace,
   resolveCanonicalRoot,
@@ -130,28 +139,74 @@ function setupRepo(base: string) {
 }
 
 // ============================================================================
-// A. 判定基准（根因）
+// A. 契约（主管裁决 (a)）：只加 scratch 边界，判定基准保持 g-149 旧语义
 // ============================================================================
 
-test("g-363 根因：主工作树的普通子目录不再被判为 linked worktree", () => {
+test("g-363 A1：仓库内 git-ignored 子目录 = 独立项目根；被跟踪子目录/工作树根照旧归一到项目看板", () => {
   _clearCanonicalRootCache();
   const base = mkdtempSync(join(tmpdir(), "g363-subdir-"));
   try {
-    const { mainDir } = setupRepo(base);
-    const sub = join(mainDir, "src");
+    const { mainDir, worktreeDir } = setupRepo(base);
 
-    // 负向对照的「旧判据」：子目录天然满足 realpath(sub) !== realpath(main) ——
-    // 旧实现仅凭这一点就把它当成 linked worktree 并 canonicalize 到主树看板。
-    assert.notEqual(resolve(sub), resolve(mainDir), "旧判据 workspace !== mainWorktree 对子目录恒为真");
-
-    const info = discoverGitWorktree(sub);
-    assert.ok(info, "子目录仍在 git 工作树内，应返回发现结果");
-    assert.equal(info.isLinkedWorktree, false, "主工作树的子目录不是 linked worktree");
+    // ① 仓库内**被跟踪**子目录（`core/`、`docs/` 一类）：g-149 语义逐字不变 —— 仍归一到
+    //    该项目主工作树的看板，**不是** `<子目录>/.dsh-graph`（否则现存游离空骨架
+    //    `dsh-graph-host/.dsh-graph` 会变成活动看板）。
+    const tracked = join(mainDir, "src");
+    assert.equal(isScratchWorkspace(tracked), false, "被跟踪子目录不是 scratch");
+    const info = discoverGitWorktree(tracked);
+    assert.ok(info, "被跟踪子目录仍是该 git 工作树的项目内容");
+    assert.equal(info.isLinkedWorktree, true, "裁决 (a)：判据保持 workspace !== mainWorktree");
     assert.equal(info.worktreeRoot, resolve(mainDir), "worktreeRoot = 包含它的工作树根");
+    const trackedCanonical = resolveCanonicalRoot(undefined, tracked);
+    assert.equal(trackedCanonical.mode, "canonicalized", "被跟踪子目录仍归一（不新增行为变化）");
+    assert.equal(trackedCanonical.root, join(mainDir, ".dsh-graph"), "落项目看板，不是 <子目录>/.dsh-graph");
+    assert.notEqual(trackedCanonical.root, join(tracked, ".dsh-graph"));
 
-    const canonical = resolveCanonicalRoot(undefined, sub);
-    assert.equal(canonical.mode, "main-tree", "按 main-tree 解析，不 canonicalize");
-    assert.equal(canonical.root, join(sub, ".dsh-graph"), "graph root 落在子目录自己下");
+    // ② 仓库内 **git-ignored** 子目录（`tmp/` 一类）= 独立项目根：不归一化、不归属外层仓库
+    const ignored = join(mainDir, "tmpdata");
+    assert.equal(isScratchWorkspace(ignored), true, "被忽略子目录 = scratch");
+    assert.equal(discoverGitWorktree(ignored), null, "scratch 不被当成该仓库的工作树项目");
+    const ignoredCanonical = resolveCanonicalRoot(undefined, ignored);
+    assert.equal(ignoredCanonical.mode, "workspace-fallback", "scratch 走 workspace-local 口径");
+    assert.equal(ignoredCanonical.root, join(ignored, ".dsh-graph"), "graph root 落在 scratch 自己下");
+
+    // ③ 主树根 与 真 linked worktree 根：字节级同前
+    const mainRoot = resolveCanonicalRoot(undefined, mainDir);
+    assert.equal(mainRoot.mode, "main-tree", "主树根仍 main-tree");
+    assert.equal(mainRoot.root, join(mainDir, ".dsh-graph"));
+    const wtRoot = resolveCanonicalRoot(undefined, worktreeDir);
+    assert.equal(wtRoot.mode, "canonicalized", "worktree 根即使命中 .worktrees/ 忽略规则仍归一");
+    assert.equal(wtRoot.root, join(mainDir, ".dsh-graph"));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("g-363 A2（字符级，平台无关）：check-ignore 参数数组不含引号、路径以 / 分隔", () => {
+  _clearCanonicalRootCache();
+  const base = mkdtempSync(join(tmpdir(), "g363-argv-"));
+  try {
+    const { mainDir } = setupRepo(base);
+
+    // 传参形状：数组签名（不经 shell）⇒ Windows 上不会被 cmd.exe 剩引号；路径必须 `/` 分隔，
+    // 否则 `relative()` 在 Windows 产出的 `\` 匹配不上 .gitignore 里按 `/` 写的规则。
+    const argv = checkIgnoreArgv(mainDir, join(mainDir, "tmpdata"));
+    assert.deepEqual(argv, ["check-ignore", "-q", "--", "tmpdata/"], "参数数组形状固定");
+    assert.ok(
+      argv!.every((a) => !a.includes("'") && !a.includes('"')),
+      `参数不得含引号字符（Windows cmd.exe 不剥离单引号 ⇒ 会变成路径的一部分）：${JSON.stringify(argv)}`,
+    );
+    assert.ok(!argv!.at(-1)!.includes("\\"), "路径必须 / 分隔，不得含反斜杠");
+    assert.ok(argv!.at(-1)!.endsWith("/"), "目录路径带尾斜杠（目录专用忽略规则对不存在的路径也命中）");
+    // 工作树外路径不生成命令（保守地按非 scratch 处理）
+    assert.equal(checkIgnoreArgv(mainDir, resolve(mainDir, "..", "outside")), null, "越界路径返回 null");
+    assert.equal(checkIgnoreArgv(mainDir, mainDir), null, "工作树根自身返回 null");
+
+    // 端到端：含空格 / 单引号 / 非 ASCII 的 ignored 目录同样判定为 scratch（无需任何转义）
+    const tricky = join(mainDir, "tmpdata", "it's 空 格");
+    mkdirSync(tricky, { recursive: true });
+    assert.equal(isScratchWorkspace(tricky), true, "含空格/引号/非 ASCII 的 ignored 路径同样是 scratch");
+    assert.equal(resolveCanonicalRoot(undefined, tricky).root, join(tricky, ".dsh-graph"));
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -275,7 +330,7 @@ test("g-363 不误伤：linked worktree 根（.worktrees/ 被 ignore）仍归一
   }
 });
 
-test("g-363 边界：工作树内「已跟踪子目录」照旧归属该项目，「被忽略子目录」才隔离", () => {
+test("g-363 C（linked worktree 一侧不误伤）：工作树内「已跟踪子目录」照旧归一，「被忽略子目录」才隔离", () => {
   _clearCanonicalRootCache();
   const base = mkdtempSync(join(tmpdir(), "g363-boundary-"));
   try {
