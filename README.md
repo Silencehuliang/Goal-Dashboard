@@ -32,7 +32,7 @@
 | 平台 | 本版状态 |
 |------|----------|
 | Linux / WSL2 | ✅ 已实测通过 |
-| 原生 Windows | ⚠️ **未验证**（最近真机结论见 [v0.16.0 清单](docs/release-checklist-v0.16.0.md)） |
+| 原生 Windows | ✅ **已实测通过**（原生 `win32/x64`，宿主 `@deepseek-ai/dsh@0.2.0-rc.2`；本版包 T1–T5 通过 10 / 失败 0 / 告警 0，见 [v0.17.0 清单](docs/release-checklist-v0.17.0.md) §3.1） |
 | macOS | ⚠️ **未验证**（最近真机结论见 [v0.16.0 清单](docs/release-checklist-v0.16.0.md)） |
 
 三平台共用同一安装包。已知限制：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。

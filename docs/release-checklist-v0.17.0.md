@@ -12,13 +12,16 @@
 
 **本次执行树**：worktree `.worktrees/g-375-att-01`，分支 `g-375-att-01`，基线 **`6d5500a`**
 （= `v0.17.0-test` HEAD，含 g-363 / g-367 / g-371 / g-372 / g-373 / g-374）。
+**文档 delta（追加在同一 worktree 的 `7e25c0b` 之上）**：仅改文档 —— 三处平台状态表的 **Windows** 行改为真机结论（macOS 行保持「未验证」），
+并按负责人真机证据回填本清单 §0 / §2 / §3.1 / §3.3 / §8；**未改任何代码 / 测试断言 / `engines` / `peerDependencies` / `PLUGIN_VERSION`**（仍 `0.17.0`），
+随后在 worktree 内重切 tarball、复算指纹并逐成员比对。详见 §3.3 与 §8 的 delta 说明。
 **纪律（准备阶段）**：全部构建 / 测试 / 打包 / 门禁**均在 worktree 内**完成；**未写主树 `dist/`**
 （主树 `dist/` 是运行中宿主的资产来源，历史上有 worker 因主树构建争用而静默死亡）；
 worktree 缺 `node_modules`，经**符号链接**指向主树只读复用（不入 git，不改 `pnpm-workspace.yaml` / lockfile）。
 
 ---
 
-## 0. 相对上一版（v0.16.1）的用户可见变更（6 条）
+## 0. 相对上一版（v0.16.1）的变更（5 条用户可见 + 1 条维护者可见）
 
 1. **支持 DSH 0.2.0 系宿主**：`engines.dsh` 由 `>=0.1.5-rc.2 <0.1.8-0` 放宽为 `>=0.1.5-rc.2 <0.2.1-0`
    （上界 `-0` 排除 `0.2.1` 的一切预发布与正式版）；隔离实例实测 `0.2.0-rc.1`，负责人 2026-09-30 真机复验 `0.2.0-rc.2`。
@@ -31,7 +34,7 @@ worktree 缺 `node_modules`，经**符号链接**指向主树只读复用（不�
    隔离实例、门禁运行与测试套件不再写入真实 `.dsh-graph`，worktree 内也不再出现与改动无关的假红。
 5. **隔离实例可从零重建**：修复 pnpm 12 下 `scripts/dsh-test-web.sh` 无法新建实例（依赖构建放行、
    私有解析根、解析重试），不再需要手工搭运行时绕过。
-6. **文档面机器守卫**：README 工具表六面一致性、工具计数、记忆上限取值与 CHANGELOG 版本节结构由测试钉住（改坏即红）。
+6. **（维护者可见，不进 CHANGELOG）文档面机器守卫**：README 工具表六面一致性、工具计数、记忆上限取值与 CHANGELOG 版本节结构由测试钉住（改坏即红）。
 
 > 两份 README（根 `README.md` + 包内 `dsh-graph-host/README.md`，中英）已同步「最新亮点（v0.17.0）」；
 > 仓库根 `CHANGELOG.md` 新增 `## v0.17.0 — 2026-09-30` 节（5 条要点）。
@@ -57,8 +60,9 @@ worktree 缺 `node_modules`，经**符号链接**指向主树只读复用（不�
 - [x] **版本号一致**（发布门禁红线 2）：见 §3.2 逐处 `文件:行` 实测输出
 - [x] 两份 README（中 / 英）+ 根 README 同步 v0.17.0 版本表述与「最新亮点（v0.17.0）」，**历史小节原文逐字保留**
 - [x] `CHANGELOG.md` 新增 `## v0.17.0 — 2026-09-30` 节（5 条，符合每节 ≤5 条）
-- [x] **平台声明如实（红线 1）**：两份 README 平台状态表保持「Windows 未验证 / Not verified」，
-      与本清单 §3.1 一致（本版**未**用本版 tarball 在原生 Windows 跑完整 T1–T5）
+- [x] **平台声明如实（红线 1）**：三处平台状态表（根 + 包内中/英）的 **Windows** 行改为
+      「**已实测通过 / Verified on-device**」（负责人 2026-09-30 真机完整 T1–T5 = 10 / 失败 0 / 告警 0，见 §3.1）；
+      **macOS 三处仍保持「未验证 / Not verified」**（macOS 从未跑过真机门禁，不得与 Windows 混为一谈）
 - [x] **宿主门禁命令与 `engines.dsh` 声明一致**：见 §4（`@deepseek-ai/dsh@0.2.0-rc.2`，
       对照 v0.16.0「门禁结论与声明上界不一致」的教训）
 - [x] 全量测试 `node --test core/tests/*.test.ts` = **1514 / 1514，fail 0**（§5）
@@ -66,32 +70,43 @@ worktree 缺 `node_modules`，经**符号链接**指向主树只读复用（不�
 - [x] `node --check dist/lib/client.js` = **OK**（exit 0，§5）
 - [x] `(cd dist && pnpm pack --dry-run)` = **通过，37 个文件**（§5）
 - [x] tarball 已产出并记录确切文件名 + sha256（红线 3）：见 §3.3
+- [x] 文档 delta 后**重切** tarball：最终 sha256 `b5b3e0a4…`；逐成员比对显示除 `package/README.md`
+      外 **36 个成员 sha256 逐字节未变**（§3.3）
 - [x] Linux 平台门禁（离线静态段）实跑 `P1–P6 + M4` = **通过 9 / 失败 0 / 告警 0**（§6）
 - [x] 生产看板污染守卫自查（g-363 修复后的回归）：见 §7
 - [x] g-352 冻结签名 fixture 随 `PLUGIN_VERSION` 变更**重新冻结**：正文与 `content-sha256`
       （`0e6b7094…`）**逐字节未变**，仅 provenance 三行更新（description / source-commit / source-sha256）
       —— 维护者工具 + `G352_SIG_ACK=1` 显式 ack，与 v0.16.1 同一做法（见 §5.1）
 - [x] CHANGELOG 版本节快照同步更新（`core/tests/g371-changelog-guard.test.ts`）——**补断言，未放宽**（见 §5.1）
-- [ ] **未做**：完整平台门禁（需 `npx` 联网安装 DSH 的 T2–T5 段）、Windows / macOS 原生真机完整门禁、
-      合并 `main`、打 tag、`pnpm publish`（后四项为人工 gate）
+- [x] **Windows 原生真机完整门禁已取得**（负责人 2026-09-30，原生 `win32/x64` + 宿主 `0.2.0-rc.2`，
+      被验包 `4e11d772…`，T1–T5 = 10 / 失败 0 / 告警 0；见 §3.1）
+- [ ] **未做**：macOS 原生真机门禁、合并 `main`、打 tag、`pnpm publish`（后三项为人工 gate）；
+      完整门禁 T2–T5 由负责人在 Windows 真机执行（非本 attempt 自跑，见 §8 第 3 条）
 
 ## 3. 三条发布红线逐条结论
 
-### 3.1 红线 1 —— Windows 兼容性：**❌ 完整真机门禁未执行 ⇒ 如实标注「未验证」**
+### 3.1 红线 1 —— Windows 兼容性：**✅ 满足（负责人真机完整 T1–T5：通过 10 / 失败 0 / 告警 0，总判定 PASS）**
 
 | 项 | 值 |
 |---|---|
-| 本版完整 Windows 原生门禁（T1–T5，含 T2 安装 / T4 实例 / T5 REST） | ❌ **未执行** —— 未用本版 tarball 跑 `--tarball` |
-| 已回传的真机**部分**结论 | ✅ **T1 静态门禁 PASS**：负责人 2026-09-30，原生 `win32/x64` / node `v24.13.0`；命令 `node win-smoke-test.mjs --static-only \\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph` ⇒ **通过 1 / 失败 0 / 告警 0**（**仅 T1**，扫描 1 个文件，**不含** T2–T5） |
-| macOS 原生门禁（本版） | ❌ **未执行** |
-| 红线 1 结论 | **不满足**（完整 Windows 门禁缺失）⇒ 平台状态一律写「**未验证**」，**不得读出 PASS** |
-| README 表述一致性 | ✅ 三处一致：`README.md:35`「⚠️ **未验证**」、`dsh-graph-host/README.md:52`「⚠️ **未验证**」、`dsh-graph-host/README.md:216`「⚠️ **Not verified**」 |
-| 发布前若负责人决定补跑 | `node win-smoke-test.mjs --tarball <Windows 侧路径>\dsh-graph-0.17.0.tgz --dsh "npx -y @deepseek-ai/dsh@0.2.0-rc.2"`，结论回填本表后方可改 PASS |
-| Windows 侧 tarball 可达路径（UNC） | `\\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\.worktrees\g-375-att-01\tmp\` |
-| 最近一次**完整**真机结论（Windows） | v0.16.0 周期（2026-09-25）：通过 10 / 失败 0 / 告警 0 —— 出处 [`docs/release-checklist-v0.16.0.md`](release-checklist-v0.16.0.md) §3.1 |
+| 本版完整 Windows 原生门禁（T1–T5，含 T2 安装 / T4 实例 / T5 REST） | ✅ **已执行并 PASS** —— 负责人 2026-09-30，原生 Windows（`win32/x64`，node `v24.13.0`）；命令 `node win-smoke-test.mjs --tarball <Windows 侧路径>\dsh-graph-0.17.0.tgz --dsh "npx -y @deepseek-ai/dsh@0.2.0-rc.2"` ⇒ **通过 10 / 失败 0 / 告警 0，总判定 PASS** |
+| 被验包（人类证据登记） | `dsh-graph-0.17.0.tgz`，sha256 `4e11d7720e5b46e09623d6c648271c2fda868cd4d93dbc240ada02c1ce1327f7`、547,947 B（**已验包**；最终包指纹与差异见 §3.3 delta 说明） |
+| T1 静态门禁 | ✅ PASS（扫描 **15** 个文件） |
+| T2 全新隔离 profile 安装 | ✅ PASS（自带依赖 `yaml` 落地；已安装版本 = `0.17.0`） |
+| T3 核心运行时 | ✅ PASS（六步流程 + 跨进程并发 CAS「4 抢 1」**恰好 1 成功**） |
+| T4 实例启动 / 插件加载 | ✅ PASS |
+| T5 路由注册 + 看板载荷 + Web UI | ✅ PASS（Web UI 返回 HTTP 303） |
+| 宿主版本 | `@deepseek-ai/dsh@0.2.0-rc.2`（落在 `engines.dsh` 声明区间内，见 §4） |
+| 第二机指纹对账 | ✅ Windows `certutil -hashfile … SHA256` 复算结果与产出侧 sha256 **逐字节一致** ⇒ 跨机对账闭合 |
+| macOS 原生门禁（本版） | ❌ **未执行**（macOS 从未跑过真机门禁）⇒ README 三处 macOS 行**保持**「未验证 / Not verified」 |
+| 红线 1 结论 | **✅ 满足**（Windows 完整真机门禁已取得；macOS 部分如实标注未验证，未读到任何 PASS） |
+| README 表述一致性 | ✅ 三处一致：`README.md:35`、`dsh-graph-host/README.md:52`、`dsh-graph-host/README.md:216` 均为「Windows 已实测通过 / Verified on-device」；同三处 macOS 行仍为「未验证 / Not verified」 |
+| 最终包是否复跑门禁 | **不重跑**（负责人明示）：最终包与已验包只差 `package/README.md` 的文字，**无代码 / 断言 / 声明变更**，README 文字不影响功能 —— 见 §3.3 与 §8 的 delta 说明 |
+| Windows 侧 tarball 取件路径（UNC） | `\\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\win-handoff\`（最终包 + `win-smoke-test.mjs` / `.cmd` 已拷入主树 handoff 目录） |
 
-> `AGENTS.md`「发布门禁」段：Linux/WSL2 全绿**不能替代** Windows 真机结论。本版**未取得**该结论，
-> 故 README 与本清单**只**写「未验证」，并在 §8 登记为已知限制。
+> `AGENTS.md`「发布门禁」段要求「每个版本发布前必须在原生 Windows 上做一次兼容性测试（T1–T5）」：
+> 本版该项**已由负责人在真机完成并取得 PASS**。Linux/WSL2 的离线静态段（§6）**不参与**该结论的推导。
+> macOS **仍无**真机结论，故其平台状态三处一律如实写「未验证 / Not verified」——两者口径**分开**，不得合并表述。
 
 ### 3.2 红线 2 —— 版本号一致：**✅ 满足（实测输出如下）**
 
@@ -116,21 +131,25 @@ worktree 缺 `node_modules`，经**符号链接**指向主树只读复用（不�
 | 项 | 值 |
 |---|---|
 | 文件名 | `dsh-graph-0.17.0.tgz` |
-| 产出方式 | worktree 内 `bash scripts/build.sh` 后 `(cd dist && pnpm pack --pack-destination "$OLDPWD/tmp/")` |
-| 绝对路径（worktree 内） | `/home/miuzel/workspace/personal/dsh-graph/.worktrees/g-375-att-01/tmp/dsh-graph-0.17.0.tgz` |
+| 产出方式 | worktree 内 `bash scripts/build.sh` 后 `(cd dist && pnpm pack --pack-destination ../tmp/att02/new)`（**文档 delta 后重切**） |
+| 绝对路径（worktree 内） | `/home/miuzel/workspace/personal/dsh-graph/.worktrees/g-375-att-01/tmp/dsh-graph-0.17.0.tgz`（**最终包**，即 `tmp/att02/new/` 产出物；**已验包** `4e11d772…` 归档于同目录 `tmp/att02/old-4e11d772.tgz` 备查） |
+| 主树取件副本 | `/home/miuzel/workspace/personal/dsh-graph/tmp/win-handoff/dsh-graph-0.17.0.tgz`（与上同一文件，sha256 相同） |
 | 包内版本 | `0.17.0`（`tar -xzOf … package/package.json` 实测） |
 | 包内文件数 | **37**（`pnpm pack --dry-run` 清单实数，与 `find dist -type f \| wc -l` = 37 一致） |
 | 包内构建中间物 | **零**：清单内无 `*.ts`、无 `core-dist/`、无 `*.map`（`grep -cE '\.ts$\|core-dist\|\.map$'` = 0） |
-| 体积 | **547,947 B** |
-| sha256 | **`4e11d7720e5b46e09623d6c648271c2fda868cd4d93dbc240ada02c1ce1327f7`** |
+| 体积 | **548,137 B** |
+| **最终包 sha256** | **`b5b3e0a40321d692fdeee78d339db0355bc669a5c7347b49b0185bcc2cc5498d`** |
+| 已验包（Windows 门禁用）sha256 | `4e11d7720e5b46e09623d6c648271c2fda868cd4d93dbc240ada02c1ce1327f7`（547,947 B；负责人 2026-09-30 真机 T1–T5 = 10 / 0 / 0，见 §3.1） |
+| **delta 说明（已验包 → 最终包）** | 两包**唯一差异是 `package/README.md` 的文字**：平台状态表 Windows 行 ×2（中 / 英各 1 行替换，`diff` 共 2 hunk / 2 行改），**无任何代码 / 断言 / `engines` / `peerDependencies` / 版本串变更**。逐成员 sha256 比对：37 个包内成员中**仅 `README.md` 变化**，其余 **36 个逐字节相同**（`tmp/att02/old.sha` vs `new.sha`） |
+| 免复跑依据 | 负责人**明示**：最终包**不再重跑**门禁（README 文字不影响功能）⇒ §3.1 的「已验包」结论**原样适用**于最终包 |
 | 发布前 `dist/` 卫生 | `find dist -name '*.tgz' \| wc -l` = **0**；`find dist -type f \| wc -l` = **37** |
-| 定稿后重打包复算 | 本清单（`docs/` 不在包内）写入后再次 `pnpm pack` ⇒ sha256 **逐位相同**、`cmp` **字节相同**（`tmp/verify-pack/`） |
-| 原始输出 | `tmp/release-0170/6-pack.log`、`7-sha256.log`、`5-pack-dryrun.log` |
+| 原始输出 | 首版：`tmp/release-0170/6-pack.log`、`7-sha256.log`、`5-pack-dryrun.log`；delta 重切：`tmp/att02/old.sha`、`tmp/att02/new.sha`、`tmp/att02/readme-delta.diff` |
 
 > **对账纪律（跨机传递唯一渠道 = tarball）**：接收方在 Windows 侧复算同一文件的 sha256，
 > 与上表**逐位**一致方可安装验证。注意：**registry 侧**（npm 会重写 tarball）sha256 必然不同 ——
 > 跨机对账用 sha256，registry 侧用内容级判据（参见 v0.16.0 清单 §3.3 的实证）。
-> 本版准备阶段**未**在第二台机器复算指纹（§8 未做项）。
+> 本版**已**在第二台机器复算指纹：负责人在 Windows 侧 `certutil -hashfile … SHA256` 复算，
+> 与产出侧 sha256 `4e11d772…` **逐字节一致**（§3.1）；该指纹对应**已验包**，最终包指纹见上表（差异仅为 README 文字）。
 
 ## 4. 宿主门禁命令（与 `engines.dsh` 声明一致）
 
@@ -214,19 +233,24 @@ node scripts/platform-smoke-test.mjs --static-only .     # → tmp/release-0170/
 
 ## 8. 已知限制与「未做 / 未验证」清单（不阻断准备，但**必须如实登记**）
 
-1. **Windows 完整原生门禁未执行**（§3.1）：只有 T1 静态段真机 PASS；发布红线 1 **未满足**，
-   README 与本清单一律写「未验证」，**不得**由 Linux 全绿推出 PASS。发布前须由负责人决定是否补跑并回填。
-2. **macOS 原生门禁未执行**：README 平台状态表写「未验证 / Not verified」。
-3. **完整平台门禁（T2–T5）与宿主门禁命令未在本版实跑**（§6）：需 `npx` 联网拉取
-   `@deepseek-ai/dsh@0.2.0-rc.2`；本版准备阶段只跑了**离线静态段**。宿主兼容性结论的出处是
-   g-372 的隔离实例 A/B 门验 + 负责人 2026-09-30 真机复验（rc.2），**不是**本次 attempt 自跑。
+1. **Windows 完整原生门禁已执行并 PASS**（§3.1，本版该项已关闭）：负责人 2026-09-30 在原生 Windows
+   （`win32/x64`，node `v24.13.0`，宿主 `@deepseek-ai/dsh@0.2.0-rc.2`）用**已验包**跑完 T1–T5，
+   通过 10 / 失败 0 / 告警 0 ⇒ 发布红线 1 **已满足**。**唯一残留**：门禁跑的是已验包 `4e11d772…`，
+   最终包 `b5b3e0a4…` 只差 `package/README.md` 文字，负责人**明示免复跑**（见第 6 条）。
+2. **macOS 原生门禁未执行**：README 平台状态表三处均写「未验证 / Not verified」（macOS 从未跑过真机门禁）。
+3. **完整门禁 T2–T5 未由本 attempt 自跑**（§6）：本 attempt 只跑**离线静态段**；Windows 侧完整 T1–T5
+   结论的出处是**负责人真机执行**（§3.1）。宿主 `0.2.0-rc.2` 另经 g-372 隔离实例 A/B 门验。
 4. **未做发布后核验**（全新隔离 profile 安装 → 工具 / 看板 / skill 注册）：属发布后动作。
-5. **未在第二台机器复算 tarball sha256**：本清单登记的是 worktree 内单点指纹（§3.3），跨机对账待接收方复算。
-6. **未执行任何发布动作 / 未合并 `main` / 未打 tag**：合并与 tag 由负责人在人工 gate 决定；
+5. **第二台机器已复算 tarball sha256**（本版该项已关闭）：负责人在 Windows 侧 `certutil -hashfile … SHA256`
+   复算，与产出侧 `4e11d772…` 逐字节一致（§3.1）；该指纹对应**已验包**，最终包指纹见 §3.3。
+6. **delta 说明（已验包 → 最终包）**：差异**仅** `package/README.md` 的平台状态表 Windows 行（中 / 英各 1 行），
+   37 个包内成员中**其余 36 个 sha256 逐字节未变**；无代码 / 断言 / `engines` / `peerDependencies` / 版本串变更
+   ⇒ 负责人**明示免复跑门禁**，§3.1 结论原样适用于最终包。
+7. **未执行任何发布动作 / 未合并 `main` / 未打 tag**：合并与 tag 由负责人在人工 gate 决定；
    本 worktree 的改动（含本清单）尚未合入任何共享分支。
-7. **P1 / P3 的平台限制（非缺陷，只报告）**：本机 ext4 大小写敏感；在大小写不敏感卷上，
+8. **P1 / P3 的平台限制（非缺陷，只报告）**：本机 ext4 大小写敏感；在大小写不敏感卷上，
    仅大小写不同的 goal id / version slug 会互相别名，脚本按设计给 WARN 并附影响说明。
-8. **M4 只覆盖发布路径**：`scripts/archived/` 内仍有 41 处 Linux-only 假设（归档脚本，非发布路径，只列 INFO）。
+9. **M4 只覆盖发布路径**：`scripts/archived/` 内仍有 41 处 Linux-only 假设（归档脚本，非发布路径，只列 INFO）。
 
 ## 9. 发布操作（**人工 gate，本阶段未执行**）
 
@@ -240,6 +264,8 @@ node scripts/platform-smoke-test.mjs --static-only .     # → tmp/release-0170/
    token 已失效，**必须先重新登录**再 publish。
 
 **本次已执行（准备阶段）**：worktree 内版本号抬升 + 两份 README 与 CHANGELOG 同步 + 本清单、
-`bash scripts/build.sh`、全量测试、类型 / 语法 / 打包校验、离线静态平台门禁、tarball + sha256 记录。
-**本次未执行**：`git tag`、GitHub release、`git push`、`npm publish`、合并 `main`、完整 Windows / macOS 门禁、
-完整平台门禁 T2–T5。
+`bash scripts/build.sh`、全量测试、类型 / 语法 / 打包校验、离线静态平台门禁、tarball + sha256 记录；
+随后在 `7e25c0b` 之上追加**文档 delta**（三处平台状态表 Windows 行改真机结论 + 本清单 §0 / §2 / §3.1 / §3.3 / §8 回填），
+**重切 tarball** 并逐成员比对指纹（仅 `package/README.md` 变化）。
+**由负责人在真机完成（非本 attempt）**：Windows 原生完整 T1–T5 门禁（10 / 失败 0 / 告警 0，§3.1）+ Windows 侧 sha256 复算对账。
+**本次未执行**：`git tag`、GitHub release、`git push`、`npm publish`、合并 `main`、macOS 原生真机门禁。

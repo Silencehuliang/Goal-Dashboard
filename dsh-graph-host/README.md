@@ -49,7 +49,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 | 平台 | 本版状态 |
 |------|----------|
 | Linux / WSL2 | ✅ 已实测通过 |
-| 原生 Windows | ⚠️ **未验证**（最近真机结论见 [v0.16.0 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md)） |
+| 原生 Windows | ✅ **已实测通过**（原生 `win32/x64` / node `v24.13.0`，宿主 `@deepseek-ai/dsh@0.2.0-rc.2`；本版包 T1–T5 **通过 10 / 失败 0 / 告警 0**，Windows `certutil` 复算 sha256 `4e11d772…` 与产出侧逐字节一致） |
 | macOS | ⚠️ **未验证**（最近真机结论见 [v0.16.0 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md)） |
 
 三平台使用同一安装包。**已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
@@ -213,7 +213,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 | Platform | Status for this release |
 |----------|-------------------------|
 | Linux / WSL2 | ✅ Verified on-device |
-| Native Windows | ⚠️ **Not verified** (most recent on-device verdict: [v0.16.0 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md)) |
+| Native Windows | ✅ **Verified on-device** (native `win32/x64` / node `v24.13.0`, host `@deepseek-ai/dsh@0.2.0-rc.2`; T1–T5 on this release's tarball: **10 passed / 0 failed / 0 warnings**; Windows `certutil` SHA256 recomputed and byte-identical to the build side) |
 | macOS | ⚠️ **Not verified** (most recent on-device verdict: [v0.16.0 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md)) |
 
 All three platforms share the same package. **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
