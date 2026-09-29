@@ -391,6 +391,20 @@ test("g-374 F5 提示词面：formatSummaryPrompt zh/en 对称且都钉住「改
     assert.match(text, /(judg|判据)/i, `${name} 必须要求逐字引用判据`);
     assert.match(text, /256/, `${name} 必须告知输入总预算（F7）`);
   }
+  // 反回声的**提示词面**硬约束：正文主体不得复述卡片字段（标题/状态/版本/attempt 计数）
+  assert.match(zh, /严禁把卡片字段（标题 \/ 状态 \/ 版本 \/ attempt 计数）当摘要主体/, "zh 必须显式禁止回显卡片字段");
+  assert.match(en, /Never restate card fields \(title \/ status \/ version \/ attempt counts\)/, "en 必须显式禁止回显卡片字段");
+  // 材料包里卡片字段必须被标注为「仅供定位」⇒ 模型不能把它当内容来源
+  const realPrompt = formatSummaryPrompt({
+    goalId: "g-001", goalRel: ".dsh-graph/versions/v1/goals/g-001/goal.md", language: "zh",
+    digest: renderGoalResultsDigest(goalResultsDigest({
+      meta: { id: "g-001", title: "反回声", type: "task", status: "in_progress", version: "v1", blocked_reason: null },
+      description: "在目标目录下新增 results.md。",
+      attempts: [], criteria_items: ["判据 1"], comments: [], events: [],
+    })),
+  });
+  assert.match(realPrompt, /卡片字段（仅供定位，非摘要主体）/, "材料包必须把卡片字段标为仅供定位");
+  assert.match(realPrompt, /在目标目录下新增 results\.md/, "材料包必须带目标描述要点（真正的取材来源）");
   // en 零 CJK：允许的例外只有「写入器认的六个正文章节标题」（格式契约，不可翻译）
   const canonical = ["## 结论", "## 改动与影响", "## 判据达成", "## 证据引用", "## 关键决策", "## 时间线"];
   let stripped = en;

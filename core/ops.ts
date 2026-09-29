@@ -4500,7 +4500,7 @@ function renderGoalResultsDigestSkeleton(digest: GoalResultsDigest): string {
   const lines: string[] = [];
   lines.push(`> ⚠️ **预算受限模式**：本次摘要输入超过总预算 ${Math.round(SUMMARY_INPUT_TOTAL_MAX_BYTES / 1024)} KiB，只提供机器头与要点；正文本体与判据原文已省略（字节数见下方标记）。`);
   lines.push("<!-- dsh-graph:summary-input-omitted bytes=0 -->");
-  lines.push(`- 目标：${digest.goal.title}（\`${digest.goal.id}\`；type=${digest.goal.type}；status=${digest.goal.status}${digest.goal.version ? `；version=${digest.goal.version}` : ""}）`);
+  lines.push(`- 卡片字段（仅供定位，非摘要主体）：title=${digest.goal.title}；id=${digest.goal.id}；type=${digest.goal.type}；status=${digest.goal.status}${digest.goal.version ? `；version=${digest.goal.version}` : ""}`);
   if (digest.goal.blocked_reason) lines.push(`- 阻塞原因：${digest.goal.blocked_reason}`);
   lines.push(`- 目标描述小节：${digest.description_sections.length} 节（正文省略；小节标题：${digest.description_sections.map((s) => s.title).join(" / ") || "无"}）`);
   lines.push(`- 影响/约束命中行：${digest.impact_lines.length} 条（正文省略）`);
@@ -4534,7 +4534,7 @@ function renderGoalResultsDigestText(
   if (opts.limited) {
     lines.push("> ⚠️ **预算受限模式**：本次摘要输入超过总预算 256 KiB，只提供机器头与要点（未送 attempt 报文本体）。");
   }
-  lines.push(`- 目标：${digest.goal.title}（\`${digest.goal.id}\`；type=${digest.goal.type}；status=${digest.goal.status}${digest.goal.version ? `；version=${digest.goal.version}` : ""}）`);
+  lines.push(`- 卡片字段（仅供定位，非摘要主体）：title=${digest.goal.title}；id=${digest.goal.id}；type=${digest.goal.type}；status=${digest.goal.status}${digest.goal.version ? `；version=${digest.goal.version}` : ""}`);
   if (digest.goal.blocked_reason) lines.push(`- 阻塞原因：${digest.goal.blocked_reason}`);
   lines.push("- 目标描述小节（标题 + 该节要点）：");
   if (digest.description_sections.length === 0) lines.push("  - （目标描述为空）");
