@@ -161,7 +161,23 @@ node --test core/tests/*.test.ts             # 与主树同一命令、同一口
   worktree 注册、真实 `.dsh-graph` 未被写入」这个**不变量**（`git worktree list` + 真实看板
   文件不含本次唯一 marker），由 `core/tests/g363-scratch-isolation.test.ts` 钉住。
 - **发布门禁的权威证据口径不变**：发布/复核取数仍在**主工作树**做（`node --test core/tests/*.test.ts`）；
-  worktree 内跑绿是执行者的自检，不替代主树取数。
+  worktree 内跑绿是执行者的自检，不替代主树取数。主树跑之前必须确认 `dist/` 与源同步
+  （`dist-freshness-g312` 会拦：主树 dist 陈旧时该用例必红 —— 那是「主树该重建了」的信号，
+  不是代码回归；主树重建按 Build Isolation 纪律只在发布/复核的明确时点做）。
+- **实测（g-363 att-001，2026-09-29，同一 commit）**：
+
+| 口径 | 命令 | 结果 |
+|---|---|---|
+| worktree + `TMPDIR` 落 worktree | `TMPDIR=$PWD/tmp node --test core/tests/*.test.ts` | 1415 pass / **0 fail** / exit 0 |
+| worktree + 默认 `TMPDIR` | `node --test core/tests/*.test.ts` | 1415 pass / **0 fail** / exit 0 |
+| 主树（发布门禁口径） | `node --test core/tests/*.test.ts` | 1406 tests / 1405 pass / 1 fail（`dist-freshness-g312`：主树 `dist/` 相对源陈旧，**与本次改动无关**，重建后即绿） |
+
+  三条口径跑完后真实 `.dsh-graph/project.yaml`、`memory/memory.jsonl` md5 未变、
+  `git worktree list` 未变、`events.jsonl` 行数未增 —— 即「不污染真实看板」的不变量成立。
+  修复前同一命令（worktree + `TMPDIR` 落 worktree）为 **47 fail / 1359 pass / exit 1**。
+- **判别力（改坏即红）**：把两处修复分别撤掉后复跑守卫 —— 撤判定基准（回到
+  `workspace !== mainWorktree`）时 4 条红；只撤 scratch 边界时 3 条红（判定基准那条仍绿），
+  恢复后 5/5 绿。即两条规则各被独立钉住，不存在「守卫静默失效」。
 - **已知限制（如实登记，本目标未收敛）**：REST 路由把写操作 actor **硬编码为 `human:gui`**
   （`dsh-graph-host/index.js` 多处，如 `resolve-accept` / `transition` / `move-goal` / `add-card`）。
   即「任何能访问该端口的本地调用都能以负责人名义写入」——因此在隔离失效时无法从事件流区分
