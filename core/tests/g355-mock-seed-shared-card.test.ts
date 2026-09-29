@@ -21,8 +21,11 @@
  *     ⇒ 必须非 0 退出且 stderr 报 `<goal>/cards/shared-*.md` 的 ENOENT。
  *     判别力由 B 钉住：把 A 的修复撤掉，B 的断言面立刻翻转为红。
  *
- * 环境前提：`os.tmpdir()` 不得位于 `/home/` 或 `/workspace/` 下 —— seed 自带的脱敏自检会
+ * 环境前提：mock 沙箱不得位于 `/home/` 或 `/workspace/` 下 —— seed 自带的脱敏自检会
  * （正确地）拒绝把 mock 数据落在真实工作区路径下；这属环境前提，不是本目标的断言面。
+ * g-363 补：该前提不再依赖 `os.tmpdir()` 碰巧在仓库外 —— 沙箱根由 `seedSafeTempBase()`
+ * 显式挑选（仓库外且不含敏感字样），`os.tmpdir()` 被设为仓库内 `tmp/` 时套件依然绿，
+ * 且断言面（exit 0 / 共享池定位 / 计数）一字未改。
  */
 
 import { test } from "node:test";
@@ -40,12 +43,42 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const SEED = join(REPO, "scripts", "dsh-graph-mock-seed.mjs");
 const VERSION_SLUG = "v1.4";
+
+/** seed 自带脱敏自检的敏感字样（见 `scripts/dsh-graph-mock-seed.mjs` 的脱敏自检段）。 */
+const SEED_SENSITIVE = ["session-", "/home/", "/workspace/", "~/.dsh", "api_key", "token"];
+
+/**
+ * g-363：选一个满足本套件**环境前提**的临时根 —— 仓库之外，且路径不含 seed 脱敏自检的敏感字样。
+ *
+ * 为什么需要：`os.tmpdir()` 可能被设为仓库内 `tmp/`（AGENTS.md 要求临时文件写仓库 `tmp/`），
+ * 此时 mock 数据里内嵌的绝对路径（`<仓库>/...`）会命中 seed 的脱敏自检（该自检**正确地**
+ * 拒绝真实工作区路径）⇒ 套件红，但红的是环境前提而非本目标的断言面。
+ * 这里把该前提从「碰巧成立」变成「按构造成立」：断言面（exit 0 / 共享池 / 计数）一律未改。
+ */
+function seedSafeTempBase(): string {
+  const repoPrefix = `${resolve(REPO)}/`;
+  const candidates = [process.env.DSH_G355_OUTSIDE_TMP, "/tmp", process.env.TEMP, process.env.TMP, tmpdir()];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const base = resolve(raw);
+    if (`${base}/`.startsWith(repoPrefix)) continue; // 仓库内
+    if (SEED_SENSITIVE.some((s) => `${base}/`.includes(s))) continue; // 会触发 seed 脱敏自检
+    try {
+      const probe = mkdtempSync(join(base, "g355-probe-"));
+      rmSync(probe, { recursive: true, force: true });
+      return base;
+    } catch {
+      // 不可写 → 试下一个候选
+    }
+  }
+  return tmpdir();
+}
 
 /** 解析 seed 写出的 `--- <JSON> ---` frontmatter（与 seed 的 readGoalDoc 同构）。 */
 function frontmatter(file: string): Record<string, any> {
@@ -86,7 +119,7 @@ function linkDependencies(mirrorRoot: string): boolean {
 const T = { timeout: 300_000 };
 
 test("g-355 A：seed 端到端跑通，收集卡落在共享池（不再 ENOENT）", T, () => {
-  const sandbox = mkdtempSync(join(tmpdir(), "g355-seed-"));
+  const sandbox = mkdtempSync(join(seedSafeTempBase(), "g355-seed-"));
   const mockRoot = join(sandbox, "mock-demo");
   try {
     const r = runSeed(SEED, mockRoot);
@@ -148,7 +181,7 @@ test("g-355 A：seed 端到端跑通，收集卡落在共享池（不再 ENOENT�
 });
 
 test("g-355 B 负向对照：卡片定位回退到 goal 自有目录 ⇒ seed 必红", T, () => {
-  const sandbox = mkdtempSync(join(tmpdir(), "g355-neg-"));
+  const sandbox = mkdtempSync(join(seedSafeTempBase(), "g355-neg-"));
   const mirror = join(sandbox, "mirror");
   try {
     // 锚点化回退：每个锚点必须恰好命中一次（锚点漂移即抛错，不静默变成永真）

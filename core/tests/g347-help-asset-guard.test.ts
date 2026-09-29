@@ -37,6 +37,9 @@
  *     「计数语境」数字时只判定它们（`dsh-graph v0.16.0 …` 头部由 RED 变 GREEN；缺声明/数字写错仍红）。
  *  R3 测试 E 去 tmp 依赖：镜像改建在 `os.tmpdir()` 并符号链接仓库 `node_modules`（供 yaml 解析），
  *     不再需要仓库内可写的 `tmp/` ⇒ 只读检出也能跑；`finally` 负责清理、异常退出不落仓库残留。
+ *     g-363 补：`os.tmpdir()` 本身可能被设为仓库内 `tmp/`（AGENTS.md 临时文件纪律），
+ *     故镜像根改由 `outOfRepoTempBase()` 显式挑一个仓库外的临时根 —— R3 前提按构造成立，
+ *     「镜像不得落在仓库内」断言一字未改。
  *
  * 结构性例外（唯一）：`graph_unbind_goal_child` 的 `{attempt|child_id}` 是「二者恰取其一」的
  * one-of 记号（schema 中两者均为可选，运行时由引擎 `if (hasAtt === hasChild) throw` 校验恰好其一）
@@ -50,11 +53,37 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { apply } from "../../dist/index.js";
 
 const repoRoot = join(import.meta.dirname, "../..");
+
+/**
+ * g-363：选一个**确定位于仓库之外**的临时根。
+ *
+ * 为什么需要：R3（见测试 E）要求镜像落在仓库外，只读检出也能跑；而 `os.tmpdir()` 可能被设为
+ * 仓库内 `tmp/`（AGENTS.md 要求临时文件写仓库 `tmp/`）⇒ 该 R3 前提从「碰巧成立」变成「不成立」。
+ * 这里显式把一个仓库外、可写的临时根挑出来，让前提**按构造成立**；测试 E 原有的
+ * 「镜像不得落在仓库内」断言一字未改（判别力不降：若把本函数改回 `tmpdir()`，断言立刻变红）。
+ */
+function outOfRepoTempBase(): string {
+  const repoPrefix = `${resolve(repoRoot)}/`;
+  const candidates = [process.env.DSH_G347_OUTSIDE_TMP, "/tmp", process.env.TEMP, process.env.TMP, tmpdir()];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const base = resolve(raw);
+    if (`${base}/`.startsWith(repoPrefix)) continue; // 仓库内 → 不满足 R3 前提
+    try {
+      const probe = mkdtempSync(join(base, "dsh-graph-g347-probe-"));
+      rmSync(probe, { recursive: true, force: true });
+      return base;
+    } catch {
+      // 不可写 → 试下一个候选
+    }
+  }
+  return tmpdir();
+}
 const SOURCE_HELP = {
   zh: join(repoRoot, "dsh-graph-host", "prompts", "help.zh.md"),
   en: join(repoRoot, "dsh-graph-host", "prompts", "help.en.md"),
@@ -479,9 +508,10 @@ function linkDependencies(mirrorRoot: string): boolean {
 }
 
 test("E 加载机制：资产为每次调用读取，改动后同一模块实例立即生效（无需重启宿主）", async () => {
-  // R3：镜像落在 os.tmpdir()，**不**依赖仓库内可写的 tmp/ ⇒ 只读检出也能跑；
-  // 镜像里的 dist/core/ops.js 需要解析 `yaml`，故把镜像根 node_modules 链接到仓库的 node_modules。
-  const mirrorRoot = mkdtempSync(join(tmpdir(), "dsh-graph-g347-mirror-"));
+  // R3：镜像落在**仓库外**的临时目录（`outOfRepoTempBase()` 显式挑选，g-363），**不**依赖
+  // 仓库内可写的 tmp/ ⇒ 只读检出也能跑；镜像里的 dist/core/ops.js 需要解析 `yaml`，
+  // 故把镜像根 node_modules 链接到仓库的 node_modules。
+  const mirrorRoot = mkdtempSync(join(outOfRepoTempBase(), "dsh-graph-g347-mirror-"));
   try {
     assert.ok(
       !mirrorRoot.startsWith(repoRoot + "/"),

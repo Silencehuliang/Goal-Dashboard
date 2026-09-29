@@ -112,14 +112,61 @@ node --test core/tests/*.test.ts
 
 - bundle 层的默认值是**相对** `config.root: .dsh-graph`（`dsh-graph-host/cordis.patch.yml`），
   按 `resolve(会话 workspace, config.root)` 解析（g-112）；
-- g-149 归一化（`core/root.ts` 的 `resolveCanonicalRoot`）：workspace 位于某个 git worktree 之内、
-  但**不是**该仓库的 main worktree 时，相对 root 会被归一到 `<main-worktree>/.dsh-graph`
-  （mode `canonicalized`）。默认 workspace 就在本仓库 `tmp/` 内，正属于这种情况；只有当 workspace
-  自身是一个 git 仓库的 main worktree 时才落在 `<workspace>/.dsh-graph`（mode `main-tree`）。
+- g-149 归一化（`core/root.ts` 的 `resolveCanonicalRoot`）：workspace 位于**真正的 linked worktree**
+  （`git worktree add` 出来的树，含其**已跟踪**子目录）内时，相对 root 会被归一到
+  `<main-worktree>/.dsh-graph`（mode `canonicalized`）；workspace 在 main worktree 内则落在
+  `<workspace>/.dsh-graph`（mode `main-tree`）。
+- **g-363 边界（2026-09-29 修正，取代本文档此前的错误描述）**：判定基准是**包含 workspace 的
+  工作树根**（`git rev-parse --show-toplevel`），不是 workspace 路径本身；且**被 git 忽略的子目录**
+  （`.gitignore` 命中，且不是工作树根自身）一律当作**独立项目根**：不归一化、不归属外层仓库的代码
+  工作树、干净度探测报 unknown（mode `workspace-fallback`）。因此：
+  - 仓库内 `tmp/**`（含隔离实例 workspace `tmp/dsh-test/<版本>/workspace`）**不再**被归一为
+    `<仓库>/.dsh-graph`，而是落在自己目录下的 `.dsh-graph` —— 隔离实例真正独立，测试夹具也
+    写不到真实看板；
+  - linked worktree **根**即使命中 `.gitignore` 的 `.worktrees/` 仍照旧归一（g-149 语义不变）。
 
-> **不要假设测试实例的看板数据落在 `tmp/` 下。** 需要与主看板分离的数据时，显式给绝对
-> `config.root`（例如在 `--host-dir` 指向的插件 profile 的 `cordis.patch.yml` 里 patch）；
-> 对看板数据做破坏性验证前，先确认实例实际使用的 root。
+> 历史缺陷（本段修正的就是它）：旧判据 `workspace !== mainWorktree` 让主工作树的**任意子目录**
+> 都被当成 linked worktree ⇒ `tmp/` 下的测试夹具写真实 `project.yaml`/`events.jsonl`、隔离实例写
+> 真实 `memory.jsonl`、在 worktree 内跑全量出现 47 条假红、真实仓库被登记出 `.worktrees/g-001-att-01`
+> 之类的夹具残留。守卫见 `core/tests/g363-scratch-isolation.test.ts`。
+
+> **与 mem-73f84ba7（隔离实例的 DSH_HOME/workspace 必须落仓库 `tmp/` 内）如何共存**：两者不冲突，
+> 不需要二选一 —— `tmp/` 仍是沙盒可写的隔离区（该记忆的要求保留），而 g-363 让「落在 `tmp/` 里」
+> 等价于「是一个**独立看板**」：git-ignored ⇒ 独立项目根。此前的张力来自判定缺陷（`tmp/` 被误判成
+> linked worktree ⇒ 隔离实例实际读写真实看板），现已消除。
+>
+> 需要与主看板分离的数据时，仍可显式给绝对 `config.root`（例如在 `--host-dir` 指向的插件 profile
+> 的 `cordis.patch.yml` 里 patch）；对看板数据做破坏性验证前，先确认实例实际使用的 root
+> （看板端点 `_diagnostics.rootMode` / `canonicalWorkspace` 会如实回报）。
+
+## 4.1 在 linked worktree 内跑测试（正确姿势与限制）
+
+执行者按隔离纪律都在 `.worktrees/g-<goal>-att-<NN>` 里干活，跑测试的正确姿势是：
+
+```bash
+cd .worktrees/g-<goal>-att-<NN>
+ln -sfn ../../node_modules node_modules      # worktree 无 node_modules（gitignored）
+bash scripts/build.sh                        # 先产出 dist/（否则 dist/index.js 类导入全红）
+node --test core/tests/*.test.ts             # 与主树同一命令、同一口径
+```
+
+- **两种 TMPDIR 都必须全绿**：默认 `TMPDIR=/tmp` 与 `TMPDIR=<worktree>/tmp`（AGENTS.md 要求临时
+  文件写仓库 `tmp/`）。后者曾是 47 条假红的来源，命令可直接复现历史缺陷：
+  `TMPDIR="$PWD/tmp" node --test core/tests/*.test.ts`（修复前 47 fail，修复后 0 fail）。
+- **两条与「是否被污染」有关的环境前提**（属环境前提，不是断言面，已由测试自身按构造保证）：
+  `g347-help-asset-guard` 的镜像必须落在仓库外、`g355-mock-seed-shared-card` 的 mock 沙箱必须
+  不含 `/home/`、`/workspace/` 等敏感字样（seed 自带脱敏自检会（正确地）拒绝真实工作区路径）。
+  两者现在显式挑选合规的临时根，`TMPDIR` 落仓库内时同样绿。
+- **不要用「某次跑绿」当结论**：套件必须不留下真实仓库残留。判据是「跑完后真实仓库无新增
+  worktree 注册、真实 `.dsh-graph` 未被写入」这个**不变量**（`git worktree list` + 真实看板
+  文件不含本次唯一 marker），由 `core/tests/g363-scratch-isolation.test.ts` 钉住。
+- **发布门禁的权威证据口径不变**：发布/复核取数仍在**主工作树**做（`node --test core/tests/*.test.ts`）；
+  worktree 内跑绿是执行者的自检，不替代主树取数。
+- **已知限制（如实登记，本目标未收敛）**：REST 路由把写操作 actor **硬编码为 `human:gui`**
+  （`dsh-graph-host/index.js` 多处，如 `resolve-accept` / `transition` / `move-goal` / `add-card`）。
+  即「任何能访问该端口的本地调用都能以负责人名义写入」——因此在隔离失效时无法从事件流区分
+  「谁写的」。本地单机单用户场景下按可接受风险处理；若要收敛，需把 actor 由请求上下文派生
+  （独立目标再做）。
 
 ## 5. 常见报错
 
