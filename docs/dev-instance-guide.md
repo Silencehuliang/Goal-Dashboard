@@ -116,10 +116,13 @@ node --test core/tests/*.test.ts
   （`git worktree add` 出来的树，含其**已跟踪**子目录）内时，相对 root 会被归一到
   `<main-worktree>/.dsh-graph`（mode `canonicalized`）；workspace 在 main worktree 内则落在
   `<workspace>/.dsh-graph`（mode `main-tree`）。
-- **g-363 边界（2026-09-29 修正，取代本文档此前的错误描述）**：判定基准是**包含 workspace 的
-  工作树根**（`git rev-parse --show-toplevel`），不是 workspace 路径本身；且**被 git 忽略的子目录**
-  （`.gitignore` 命中，且不是工作树根自身）一律当作**独立项目根**：不归一化、不归属外层仓库的代码
-  工作树、干净度探测报 unknown（mode `workspace-fallback`）。因此：
+- **g-363 边界（2026-09-29 修正，取代本文档此前的错误描述）**：只**新增一条边界** ——
+  **被 git 忽略的子目录**（`git check-ignore` 命中，且不是工作树根自身）一律当作**独立项目根**：
+  不归一化、不归属外层仓库的代码工作树、干净度探测报 unknown（mode `workspace-fallback`）。
+  「是否 linked worktree」的判据**仍是** `realpath(workspace) !== realpath(mainWorktree)` ——
+  仓库内**被跟踪**的子目录（`core/`、`docs/` 等）与工作树根的解析**逐字不变**（g-149 语义保留）。
+  （不能用「包含 workspace 的工作树根」当判据：那会让 `dsh-graph-host/.dsh-graph` 这类游离骨架
+  变成活动看板 —— 属未经论证的行为变化。）因此：
   - 仓库内 `tmp/**`（含隔离实例 workspace `tmp/dsh-test/<版本>/workspace`）**不再**被归一为
     `<仓库>/.dsh-graph`，而是落在自己目录下的 `.dsh-graph` —— 隔离实例真正独立，测试夹具也
     写不到真实看板；
@@ -129,6 +132,14 @@ node --test core/tests/*.test.ts
 > 都被当成 linked worktree ⇒ `tmp/` 下的测试夹具写真实 `project.yaml`/`events.jsonl`、隔离实例写
 > 真实 `memory.jsonl`、在 worktree 内跑全量出现 47 条假红、真实仓库被登记出 `.worktrees/g-001-att-01`
 > 之类的夹具残留。守卫见 `core/tests/g363-scratch-isolation.test.ts`。
+
+> **跨平台实现约束（g-363 返工点，Windows 红线）**：`core/root.ts` 里带**路径参数**的 git 调用
+> 一律走参数**数组**签名 —— `_gitRunner.execFileSync("git", ["check-ignore", "-q", "--", "<相对路径>/"], …)`。
+> 字符串命令形式（`execSync("git … '…'")`）在 Windows 上单引号**不被 cmd.exe 剥离** ⇒ 引号成了路径
+> 的一部分 ⇒ `git check-ignore` 恒 `exit 1` ⇒ 被判「未忽略」⇒ scratch 判定失效、三个污染出口在
+> Windows 全部回归；另外 `relative()` 在 Windows 产出 `\`，匹配不上 `.gitignore` 里按 `/` 写的规则，
+> 故路径统一 `/` 分隔。两点都由纯函数 `checkIgnoreArgv()` 负责，守卫 A2 以**字符级**断言钉住
+> （参数数组不含引号、路径 `/` 分隔、含空格/单引号/非 ASCII 的目录端到端可用）。
 
 > **与 mem-73f84ba7（隔离实例的 DSH_HOME/workspace 必须落仓库 `tmp/` 内）如何共存**：两者不冲突，
 > 不需要二选一 —— `tmp/` 仍是沙盒可写的隔离区（该记忆的要求保留），而 g-363 让「落在 `tmp/` 里」
@@ -168,16 +179,27 @@ node --test core/tests/*.test.ts             # 与主树同一命令、同一口
 
 | 口径 | 命令 | 结果 |
 |---|---|---|
-| worktree + `TMPDIR` 落 worktree | `TMPDIR=$PWD/tmp node --test core/tests/*.test.ts` | 1415 pass / **0 fail** / exit 0 |
-| worktree + 默认 `TMPDIR` | `node --test core/tests/*.test.ts` | 1415 pass / **0 fail** / exit 0 |
+| worktree + `TMPDIR` 落 worktree | `TMPDIR=$PWD/tmp node --test core/tests/*.test.ts` | 1416 pass / **0 fail** / exit 0 |
+| worktree + 默认 `TMPDIR` | `node --test core/tests/*.test.ts` | 1416 pass / **0 fail** / exit 0 |
 | 主树（发布门禁口径） | `node --test core/tests/*.test.ts` | 1406 tests / 1405 pass / 1 fail（`dist-freshness-g312`：主树 `dist/` 相对源陈旧，**与本次改动无关**，重建后即绿） |
 
+  （1416 = 修复前 1415 + 返工时新增的 A2 字符级守卫；主树一行是在**主树自己的代码/测试**上取的，
+  故仍为 1406。）
   三条口径跑完后真实 `.dsh-graph/project.yaml`、`memory/memory.jsonl` md5 未变、
   `git worktree list` 未变、`events.jsonl` 行数未增 —— 即「不污染真实看板」的不变量成立。
   修复前同一命令（worktree + `TMPDIR` 落 worktree）为 **47 fail / 1359 pass / exit 1**。
-- **判别力（改坏即红）**：把两处修复分别撤掉后复跑守卫 —— 撤判定基准（回到
-  `workspace !== mainWorktree`）时 4 条红；只撤 scratch 边界时 3 条红（判定基准那条仍绿），
-  恢复后 5/5 绿。即两条规则各被独立钉住，不存在「守卫静默失效」。
+- **判别力（改坏即红，变异命令与统计范围写明）**：变异只改 `core/root.ts` **一行**，先用副本备份、
+  跑完按副本还原（还原后 `md5` 与备份逐字节一致）；两种统计范围都给出 ——
+  守卫文件全量 `node --test core/tests/g363-scratch-isolation.test.ts`（10 条）与
+  全量套件 `node --test core/tests/*.test.ts`（默认 `TMPDIR`，1416 条）：
+  - 变异 ①：把 scratch 边界改成恒假（`const isScratch = false;`）⇒ 守卫 **8/10 红**（除「不误伤
+    linked worktree 根」与「非 scratch 干净度」两条），全量 **1408 pass / 8 fail**；
+  - 变异 ②：撤「scratch 不进项目工作树」（让 `discoverGitWorktree` 对 scratch 仍返回 info）⇒
+    守卫 **7/10 红**，全量 **1409 pass / 7 fail**；
+  - 还原后守卫 **10/10 绿**、全量 **1416 pass / 0 fail**。
+  两次变异运行期间真实看板**零污染**：两条写入类不变量**在写入前**就断言失败（前置断言在前），
+  且 `project.yaml`/`memory.jsonl` md5 未变、`events.jsonl` 未增、无 `.worktrees/g-363-att-99`
+  注册、看板内无夹具 marker。
 - **已知限制（如实登记，本目标未收敛）**：REST 路由把写操作 actor **硬编码为 `human:gui`**
   （`dsh-graph-host/index.js` 多处，如 `resolve-accept` / `transition` / `move-goal` / `add-card`）。
   即「任何能访问该端口的本地调用都能以负责人名义写入」——因此在隔离失效时无法从事件流区分
