@@ -15,14 +15,17 @@
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.1--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
-**当前版本 v0.16.1** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 49 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
+**当前版本 v0.17.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 49 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
 
-**最新亮点（v0.16.1）**
+**最新亮点（v0.17.0）**
 
-- 声明宿主兼容范围 `engines.dsh`，供 dsh-market 等宿主感知型市场在卡片展示与安装预检中读取。
-- 侧边栏窄档搜索改为单列「搜索结果」聚合泳道，窄档保持纵向单列、零横向溢出。
+- **支持 DSH 0.2.0 系宿主**：宿主兼容范围放宽为 `>=0.1.5-rc.2 <0.2.1-0`，并在隔离实例上实测 `0.2.0-rc.1` / `0.2.0-rc.2`。
+- **目标完成摘要**：目标弹窗新增只读「完成摘要」页签，子代理每次执行的输出自动落盘（零额外 token），也支持一键更新为 LLM 详情级摘要。
+- **窄档搜索按版本/分区分组**：窄档（<480px）搜索命中在聚合泳道内按版本/分区加组头与计数，仍保持单列纵向、零横向溢出。
+- **隔离实例与看板数据互不污染**：修正「仓库内子目录被误判为 linked worktree」，隔离实例、门禁与测试不再写真实看板数据；并修复 pnpm 12 下无法从零新建隔离实例。
+- **文档面机器守卫**：工具表六面一致性、工具计数、记忆上限取值与 CHANGELOG 版本节结构由测试钉住（改坏即红）。
 
-变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [docs/release-checklist-v0.16.1.md](docs/release-checklist-v0.16.1.md)，平台门禁运行手册见 [docs/platform-gate.md](docs/platform-gate.md)。
+变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [docs/release-checklist-v0.17.0.md](docs/release-checklist-v0.17.0.md)，平台门禁运行手册见 [docs/platform-gate.md](docs/platform-gate.md)。
 
 ## 平台状态
 

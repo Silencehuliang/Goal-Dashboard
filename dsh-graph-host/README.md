@@ -40,7 +40,7 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**当前版本**：v0.16.1（= npm 上已发布的最新版）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+**当前版本**：v0.17.0（= npm 上已发布的最新版）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
 **宿主兼容范围**：`engines.dsh` 声明 `>=0.1.5-rc.2 <0.2.1-0`（上界 `-0` 排除 `0.2.1` 的一切预发布与正式版），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
@@ -54,12 +54,15 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 三平台使用同一安装包。**已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
-**最新亮点（v0.16.1）**
+**最新亮点（v0.17.0）**
 
-- 声明宿主兼容范围 `engines.dsh`，供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。
-- 侧边栏窄档搜索改为单列「搜索结果」聚合泳道，窄档保持纵向单列、零横向溢出。
+- **支持 DSH 0.2.0 系宿主**：宿主兼容范围放宽为 `>=0.1.5-rc.2 <0.2.1-0`，并在隔离实例上实测 `0.2.0-rc.1` / `0.2.0-rc.2`。
+- **目标完成摘要**：目标弹窗新增只读「完成摘要」页签，子代理每次执行的输出自动落盘（零额外 token），也支持一键更新为 LLM 详情级摘要。
+- **窄档搜索按版本/分区分组**：窄档（<480px）搜索命中在聚合泳道内按版本/分区加组头与计数，仍保持单列纵向、零横向溢出。
+- **隔离实例与看板数据互不污染**：修正「仓库内子目录被误判为 linked worktree」，隔离实例、门禁与测试不再写真实看板数据；并修复 pnpm 12 下无法从零新建隔离实例。
+- **文档面机器守卫**：工具表六面一致性、工具计数、记忆上限取值与 CHANGELOG 版本节结构由测试钉住（改坏即红）。
 
-完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [v0.16.1 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.1.md)，平台门禁运行手册见 [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
+完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [v0.17.0 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.17.0.md)，平台门禁运行手册见 [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
 
 ---
 
@@ -201,7 +204,7 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**Current version**: v0.16.1 (the latest version published on npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+**Current version**: v0.17.0 (the latest version published on npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
 **Host compatibility range**: `engines.dsh` declares `>=0.1.5-rc.2 <0.2.1-0` (the `-0` upper bound excludes every `0.2.1` prerelease and final release); host-aware markets such as dsh-market read it for card display and install/update pre-flight. **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, and `0.2.0-rc.1`; `0.2.0-rc.2` (verified by the maintainer on 2026-09-30). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
@@ -215,12 +218,15 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 All three platforms share the same package. **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
 
-**What's new (v0.16.1)**
+**What's new (v0.17.0)**
 
-- Declared host compatibility range (`engines.dsh`), read by host-aware markets such as dsh-market for card display and install/update pre-flight.
-- Narrow-sidebar search now uses a single-column "Search results" aggregate lane, keeping the narrow tier a single vertical column with zero horizontal overflow.
+- **DSH 0.2.0 host line supported**: the declared host range is widened to `>=0.1.5-rc.2 <0.2.1-0`, with `0.2.0-rc.1` / `0.2.0-rc.2` verified on an isolated instance.
+- **Goal completion summaries**: the goal dialog gains a read-only "Completion summary" tab; every sub-agent run's output is captured to disk automatically (zero extra tokens), and can be upgraded to an LLM detailed summary in one click.
+- **Narrow-tier search grouped by version/section**: hits in the aggregate lane now carry group headers with counts, still a single vertical column with zero horizontal overflow.
+- **Isolated instances no longer pollute board data**: fixed the "repository subdirectory mistaken for a linked worktree" defect, so isolated instances, gates and tests no longer write to the real board data; also fixed creating an isolated instance from scratch under pnpm 12.
+- **Machine guards for the documentation surface**: tool-table six-way consistency, tool counts, memory limits and CHANGELOG section structure are pinned by tests (breaking them turns red).
 
-See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history; per-release gate verdicts live in the [v0.16.1 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.1.md) and the platform gate runbook in [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md). Official releases are distributed via npm and the dsh-market ecosystem.
+See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history; per-release gate verdicts live in the [v0.17.0 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.17.0.md) and the platform gate runbook in [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md). Official releases are distributed via npm and the dsh-market ecosystem.
 
 ---
 
