@@ -132,7 +132,7 @@ node --test core/tests/*.test.ts
 | `禁止透传受管参数：…` | 传了 `--profile` / `--dsh-home` / `--workspace` / `--patch` 等（§2.1） |
 | `不支持的参数：…` | 未知参数 |
 | `非法端口：…` / `拒绝端口 3080（生产 DSH web）` / `端口已占用：…` | 端口门禁（§2.1） |
-| `缺少 pnpx` / `缺少 node` / `缺少 realpath` | 基础命令缺失 |
+| `缺少 pnpm；请安装 pnpm 后重试` / `缺少 node` / `缺少 realpath` | 基础命令缺失 |
 | `已请求 --proxychains，但找不到 proxychains4` | `--proxychains` 但无 `proxychains4` |
 | `仓库 tmp symlink 越界：…` / `DSH_TEST_ROOT 必须位于 canonical … 下` | `tmp/` 或 `DSH_TEST_ROOT` 越过仓库 `tmp/` |
 | `无法 canonicalize 本地插件目录：…` / `--host-dir 必须位于仓库 dist、dsh-graph-host 或 .worktrees 下：…` | `--host-dir` 越界或不存在 |
