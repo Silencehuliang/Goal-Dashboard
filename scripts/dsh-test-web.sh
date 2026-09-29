@@ -26,7 +26,7 @@ PORT="${PORT:-3082}"
 [[ "$PORT" =~ ^[0-9]+$ ]] || die "非法端口：$PORT"
 (( PORT >= 1 && PORT <= 65535 )) || die "非法端口：$PORT（必须为 1-65535）"
 [ "$PORT" != 3080 ] || die '拒绝端口 3080（生产 DSH web）'
-command -v pnpx >/dev/null 2>&1 || die '缺少 pnpx；请安装 pnpm 后重试'
+command -v pnpm >/dev/null 2>&1 || die '缺少 pnpm；请安装 pnpm 后重试'
 command -v node >/dev/null 2>&1 || die '缺少 node；无法检查端口'
 if [ "$USE_PROXY" -eq 1 ]; then command -v proxychains4 >/dev/null 2>&1 || die '已请求 --proxychains，但找不到 proxychains4'; fi
 port_in_use=0
@@ -48,7 +48,7 @@ TEST_ROOT=$(realpath -m "$TEST_ROOT") || die "无法 canonicalize DSH_TEST_ROOT�
 case "$TEST_ROOT" in "$TMP_ROOT"|"$TMP_ROOT"/*) ;; *) die "DSH_TEST_ROOT 必须位于 canonical $TMP_ROOT 下";; esac
 if [ -e "$TEST_ROOT" ] && [ "$(realpath -e "$TEST_ROOT")" != "$TEST_ROOT" ]; then die "DSH_TEST_ROOT 不得通过 symlink 越界：$TEST_ROOT"; fi
 # FULL_VERSION = raw requested dsh version. Workspace/cache/effective-config/pnpm-store and the
-# pnpx/dsh package target stay per FULL_VERSION; only DSH_HOME moves to the shared stable base home.
+# installed dsh runtime stay per FULL_VERSION; only DSH_HOME moves to the shared stable base home.
 FULL_VERSION="$VERSION"
 # STABLE_VERSION: SemVer prerelease v?MAJOR.MINOR.PATCH-suffix maps to v?MAJOR.MINOR.PATCH
 # (v kept iff the input has v, e.g. v0.1.2-alpha.4 -> v0.1.2, 0.1.1-rc.2 -> 0.1.1).
@@ -71,8 +71,63 @@ mkdir -p "$DSH_HOME" "$WORKSPACE" "$CACHE_ROOT/npm" "$CACHE_ROOT/xdg" "$VERSION_
 cd "$WORKSPACE"
 export DSH_HOME npm_config_cache="$CACHE_ROOT/npm" pnpm_config_store_dir="$VERSION_ROOT/pnpm-store" XDG_CACHE_HOME="$CACHE_ROOT/xdg"
 printf '==> DSH %s | root %s | profile web | DSH_HOME %s | workspace %s | port %s\n' "$FULL_VERSION" "$TEST_ROOT" "$DSH_HOME" "$WORKSPACE" "$PORT"
-PROFILE_MANIFEST="$DSH_HOME/profiles/web/package.json"
+# pnpm takes the *nearest* pnpm-workspace.yaml as its workspace root. Every path here lives
+# under $REPO_ROOT/tmp, so without a nearer file pnpm adopts the repo root's config
+# (autoInstallPeers: false, nodeLinker: hoisted) and installs a tree without the packages
+# others declare as peers -> ERR_MODULE_NOT_FOUND @deepseek-ai/cordis-plugin-group. The DSH
+# runtime is therefore installed into the version directory (not through pnpx/dlx, which
+# reads that same inherited config) and each pnpm project gets its own root file.
+# pnpm 12 also fails the install when a dependency's build script is not allowed, so
+# allowBuilds is fed from pnpm's own report instead of hardcoded names that drift.
+PROFILE_DIR="$DSH_HOME/profiles/web"
+PROFILE_MANIFEST="$PROFILE_DIR/package.json"
+RUNTIME_DIR="$VERSION_ROOT"
+RUNTIME_DSH="$RUNTIME_DIR/node_modules/.bin/dsh"
+ALLOW_BUILDS=()
 HOST_LINK="link:$HOST_DIR"
+# $1: pnpm project dir; remaining args: packages whose build scripts are allowed.
+write_pnpm_root() {
+  local dir=$1 pkg; shift
+  mkdir -p "$dir"
+  { printf 'packages:\n  - .\nautoInstallPeers: true\n'
+    if [ $# -gt 0 ]; then printf 'allowBuilds:\n'; for pkg in "$@"; do printf "  '%s': true\n" "$pkg"; done; fi
+  } >"$dir/pnpm-workspace.yaml"
+}
+# $1: pnpm log; prints the package names pnpm reported as having ignored build scripts.
+ignored_build_pkgs() {
+  node -e '
+    const fs = require("fs");
+    const m = fs.readFileSync(process.argv[1], "utf8").match(/Ignored build scripts:([\s\S]*?)(?:\n\s*\n|\n\s*help:|$)/);
+    if (!m) process.exit(1);
+    const names = m[1].split(/[\s,]+/).filter(Boolean).map((t) => t.match(/^(@[^@\s/]+\/[^@\s/]+|[^@\s/][^@\s/]*)@\d[^\s,)]*$/)).filter(Boolean);
+    for (const hit of new Set(names.map((hit) => hit[1]))) console.log(hit);
+  ' "$1"
+}
+# $1: pnpm project dir, $2: log file, rest: command. Returns the command's exit code.
+run_pnpm_step() {
+  local dir=$1 log=$2 rc=0; shift 2
+  if [ "$USE_PROXY" -eq 1 ]; then ( cd "$dir" && proxychains4 -q "$@" ) 2>&1 | tee "$log" || rc=$?
+  else ( cd "$dir" && "$@" ) 2>&1 | tee "$log" || rc=$?; fi
+  return "$rc"
+}
+# $1: pnpm project dir, $2: log file, rest: command. Writes the private root first; on
+# failure parses pnpm's ignored-build report, allows those packages and retries once.
+install_step() {
+  local dir=$1 log=$2 rc=0 pkg added=0; shift 2
+  write_pnpm_root "$dir" ${ALLOW_BUILDS[@]+"${ALLOW_BUILDS[@]}"}
+  run_pnpm_step "$dir" "$log" "$@" || rc=$?
+  [ "$rc" -ne 0 ] || return 0
+  local names=()
+  while IFS= read -r pkg; do [ -n "$pkg" ] && names+=("$pkg"); done < <(ignored_build_pkgs "$log" 2>/dev/null || true)
+  [ "${#names[@]}" -gt 0 ] || return "$rc"
+  for pkg in "${names[@]}"; do
+    case " ${ALLOW_BUILDS[*]-} " in *" $pkg "*) ;; *) ALLOW_BUILDS+=("$pkg"); added=1;; esac
+  done
+  [ "$added" -eq 1 ] || return "$rc"
+  printf '==> 放行依赖构建脚本：%s（写入隔离根配置后重试一次）\n' "${names[*]}"
+  write_pnpm_root "$dir" "${ALLOW_BUILDS[@]}"
+  run_pnpm_step "$dir" "$log" "$@"
+}
 needs_install=1
 profile_ready() {
   node -e 'const fs=require("fs"),path=require("path"); try { const mf=process.argv[1],host=fs.realpathSync.native(process.argv[2]),m=JSON.parse(fs.readFileSync(mf,"utf8")); const resolved=require.resolve("dsh-graph/package.json",{paths:[path.dirname(mf)]}); const p=JSON.parse(fs.readFileSync(resolved,"utf8")); process.exit(m.dependencies?.["dsh-graph"]!==process.argv[3] || fs.realpathSync.native(resolved)!==host || p.name!=="dsh-graph" || p.dsh?.bundle?.patch===void 0 ? 1 : 0); } catch { process.exit(1); }' "$PROFILE_MANIFEST" "$HOST_DIR/package.json" "$HOST_LINK"
@@ -81,11 +136,17 @@ if [ -f "$PROFILE_MANIFEST" ] && profile_ready; then needs_install=0; fi
 if [ "$SKIP_INSTALL" -eq 1 ]; then
   [ "$needs_install" -eq 0 ] || die '--skip-install 要求目标 DSH_HOME 已有可复用的 dsh-graph profile；请先不带该参数运行一次'
   printf '==> 跳过 dsh-graph 插件安装（复用已有 profile）\n'
-elif [ "$needs_install" -eq 1 ]; then
-  install=(pnpx --yes "@deepseek-ai/dsh@$VERSION" plugin --profile web add @deepseek-ai/schemastery)
-  install=(pnpx --yes "@deepseek-ai/dsh@$VERSION" plugin --profile web add "$HOST_LINK")
-  printf '==> 安装本地 dsh-graph 插件（每版本 profile）\n'
-  if [ "$USE_PROXY" -eq 1 ]; then proxychains4 -q "${install[@]}" || die "插件安装失败：DSH $VERSION profile web"; else "${install[@]}" || die "插件安装失败：DSH $VERSION profile web"; fi
+else
+  if [ ! -x "$RUNTIME_DSH" ]; then
+    printf '==> 安装 DSH 运行时到版本目录（隔离仓库根 pnpm 配置）\n'
+    install_step "$RUNTIME_DIR" "$VERSION_ROOT/runtime-install.log" pnpm add "@deepseek-ai/dsh@$FULL_VERSION" \
+      || die "DSH 运行时安装失败：DSH $FULL_VERSION（详见 $VERSION_ROOT/runtime-install.log）"
+  fi
+  if [ "$needs_install" -eq 1 ]; then
+    printf '==> 安装本地 dsh-graph 插件（每版本 profile）\n'
+    install_step "$PROFILE_DIR" "$VERSION_ROOT/profile-install.log" "$RUNTIME_DSH" plugin --profile web add "$HOST_LINK" \
+      || die "插件安装失败：DSH $VERSION profile web（详见 $VERSION_ROOT/profile-install.log）"
+  fi
 fi
 [ -f "$PROFILE_MANIFEST" ] || die "插件 profile manifest 缺失：$PROFILE_MANIFEST"
 profile_ready || die "插件 profile/link/bundle 未就绪：$PROFILE_MANIFEST"
@@ -95,8 +156,11 @@ if [ "$SKIP_INSTALL" -eq 1 ]; then
   DSH_CMD=(dsh)
   printf '==> 复用 PATH 中的 dsh 命令（跳过 DSH 包安装）\n'
 else
-  DSH_CMD=(pnpx --yes "@deepseek-ai/dsh@$FULL_VERSION")
+  DSH_CMD=("$RUNTIME_DSH")
 fi
+# Report what actually runs (the --skip-install reuse path may not be the requested version).
+RUNTIME_VERSION="$("${DSH_CMD[@]}" --version 2>/dev/null | head -1 || true)"
+printf '==> 运行时 dsh：%s（版本 %s）\n' "${DSH_CMD[*]}" "${RUNTIME_VERSION:-未知}"
 dump=("${DSH_CMD[@]}" web --dump-config)
 if [ "$USE_PROXY" -eq 1 ]; then proxychains4 -q "${dump[@]}" >"$EFFECTIVE_CONFIG" 2>/dev/null || die "无法读取 web effective config：DSH $VERSION"; else "${dump[@]}" >"$EFFECTIVE_CONFIG" 2>/dev/null || die "无法读取 web effective config：DSH $VERSION"; fi
 grep -q "@deepseek-ai/dsh-base" "$EFFECTIVE_CONFIG" || die "web effective config 缺少 dsh-base：DSH $VERSION"

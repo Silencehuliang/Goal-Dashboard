@@ -9,7 +9,8 @@
 
 ## 1. 隔离模型：以 `DSH_HOME` 为边界
 
-`dsh-test-web.sh` 用**指定版本的 DSH**（经 `pnpx` 从 npm 取 `@deepseek-ai/dsh@<版本>`）拉起一个
+`dsh-test-web.sh` 用**指定版本的 DSH**（`pnpm add` 装进版本目录
+`./tmp/dsh-test/<完整版本>/node_modules`，运行时即 `node_modules/.bin/dsh`）拉起一个
 web 实例，在本地插件产物上做开发/验证，而不会碰主 GUI（`dsh web`，端口 3080）：
 
 - **隔离边界是 `DSH_HOME`**，不是 profile 名、也不是 CWD —— web 别名固定使用 `web` profile，
@@ -55,6 +56,10 @@ bash scripts/dsh-test-web.sh <DSH版本> [--port PORT] [--proxychains] [--host H
 ```text
 <dsh> web --no-open --port <PORT> [--host <HOST>]
 ```
+
+> pnpm 项目根：版本目录与 `$DSH_HOME/profiles/web` 各自写一份 `pnpm-workspace.yaml`
+> （`packages` / `autoInstallPeers: true` / `allowBuilds`），以免继承仓库根的
+> `autoInstallPeers: false` 而装出缺 peer 的树；`allowBuilds` 的包名由 pnpm 报文解析得出。
 
 `--host-dir` 允许的落点（越界即报错退出）：`$REPO_ROOT/dist`、`$REPO_ROOT/dsh-graph-host`、
 `$REPO_ROOT/.worktrees/*/dist`、`$REPO_ROOT/.worktrees/*/dsh-graph-host`；目录里必须有
@@ -127,7 +132,7 @@ node --test core/tests/*.test.ts
 | `禁止透传受管参数：…` | 传了 `--profile` / `--dsh-home` / `--workspace` / `--patch` 等（§2.1） |
 | `不支持的参数：…` | 未知参数 |
 | `非法端口：…` / `拒绝端口 3080（生产 DSH web）` / `端口已占用：…` | 端口门禁（§2.1） |
-| `缺少 pnpx` / `缺少 node` / `缺少 realpath` | 基础命令缺失 |
+| `缺少 pnpm；请安装 pnpm 后重试` / `缺少 node` / `缺少 realpath` | 基础命令缺失 |
 | `已请求 --proxychains，但找不到 proxychains4` | `--proxychains` 但无 `proxychains4` |
 | `仓库 tmp symlink 越界：…` / `DSH_TEST_ROOT 必须位于 canonical … 下` | `tmp/` 或 `DSH_TEST_ROOT` 越过仓库 `tmp/` |
 | `无法 canonicalize 本地插件目录：…` / `--host-dir 必须位于仓库 dist、dsh-graph-host 或 .worktrees 下：…` | `--host-dir` 越界或不存在 |
