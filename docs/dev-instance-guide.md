@@ -9,7 +9,8 @@
 
 ## 1. 隔离模型：以 `DSH_HOME` 为边界
 
-`dsh-test-web.sh` 用**指定版本的 DSH**（经 `pnpx` 从 npm 取 `@deepseek-ai/dsh@<版本>`）拉起一个
+`dsh-test-web.sh` 用**指定版本的 DSH**（`pnpm add` 装进版本目录
+`./tmp/dsh-test/<完整版本>/node_modules`，运行时即 `node_modules/.bin/dsh`）拉起一个
 web 实例，在本地插件产物上做开发/验证，而不会碰主 GUI（`dsh web`，端口 3080）：
 
 - **隔离边界是 `DSH_HOME`**，不是 profile 名、也不是 CWD —— web 别名固定使用 `web` profile，
@@ -55,6 +56,10 @@ bash scripts/dsh-test-web.sh <DSH版本> [--port PORT] [--proxychains] [--host H
 ```text
 <dsh> web --no-open --port <PORT> [--host <HOST>]
 ```
+
+> pnpm 项目根：版本目录与 `$DSH_HOME/profiles/web` 各自写一份 `pnpm-workspace.yaml`
+> （`packages` / `autoInstallPeers: true` / `allowBuilds`），以免继承仓库根的
+> `autoInstallPeers: false` 而装出缺 peer 的树；`allowBuilds` 的包名由 pnpm 报文解析得出。
 
 `--host-dir` 允许的落点（越界即报错退出）：`$REPO_ROOT/dist`、`$REPO_ROOT/dsh-graph-host`、
 `$REPO_ROOT/.worktrees/*/dist`、`$REPO_ROOT/.worktrees/*/dsh-graph-host`；目录里必须有
@@ -107,14 +112,102 @@ node --test core/tests/*.test.ts
 
 - bundle 层的默认值是**相对** `config.root: .dsh-graph`（`dsh-graph-host/cordis.patch.yml`），
   按 `resolve(会话 workspace, config.root)` 解析（g-112）；
-- g-149 归一化（`core/root.ts` 的 `resolveCanonicalRoot`）：workspace 位于某个 git worktree 之内、
-  但**不是**该仓库的 main worktree 时，相对 root 会被归一到 `<main-worktree>/.dsh-graph`
-  （mode `canonicalized`）。默认 workspace 就在本仓库 `tmp/` 内，正属于这种情况；只有当 workspace
-  自身是一个 git 仓库的 main worktree 时才落在 `<workspace>/.dsh-graph`（mode `main-tree`）。
+- g-149 归一化（`core/root.ts` 的 `resolveCanonicalRoot`）：workspace 位于**真正的 linked worktree**
+  （`git worktree add` 出来的树，含其**已跟踪**子目录）内时，相对 root 会被归一到
+  `<main-worktree>/.dsh-graph`（mode `canonicalized`）；workspace 在 main worktree 内则落在
+  `<workspace>/.dsh-graph`（mode `main-tree`）。
+- **g-363 边界（2026-09-29 修正，取代本文档此前的错误描述）**：只**新增一条边界** ——
+  **被 git 忽略的子目录**（`git check-ignore` 命中，且不是工作树根自身）一律当作**独立项目根**：
+  不归一化、不归属外层仓库的代码工作树、干净度探测报 unknown（mode `workspace-fallback`）。
+  「是否 linked worktree」的判据**仍是** `realpath(workspace) !== realpath(mainWorktree)` ——
+  仓库内**被跟踪**的子目录（`core/`、`docs/` 等）与工作树根的解析**逐字不变**（g-149 语义保留）。
+  （不能用「包含 workspace 的工作树根」当判据：那会让 `dsh-graph-host/.dsh-graph` 这类游离骨架
+  变成活动看板 —— 属未经论证的行为变化。）因此：
+  - 仓库内 `tmp/**`（含隔离实例 workspace `tmp/dsh-test/<版本>/workspace`）**不再**被归一为
+    `<仓库>/.dsh-graph`，而是落在自己目录下的 `.dsh-graph` —— 隔离实例真正独立，测试夹具也
+    写不到真实看板；
+  - linked worktree **根**即使命中 `.gitignore` 的 `.worktrees/` 仍照旧归一（g-149 语义不变）。
 
-> **不要假设测试实例的看板数据落在 `tmp/` 下。** 需要与主看板分离的数据时，显式给绝对
-> `config.root`（例如在 `--host-dir` 指向的插件 profile 的 `cordis.patch.yml` 里 patch）；
-> 对看板数据做破坏性验证前，先确认实例实际使用的 root。
+> 历史缺陷（本段修正的就是它）：旧判据 `workspace !== mainWorktree` 让主工作树的**任意子目录**
+> 都被当成 linked worktree ⇒ `tmp/` 下的测试夹具写真实 `project.yaml`/`events.jsonl`、隔离实例写
+> 真实 `memory.jsonl`、在 worktree 内跑全量出现 47 条假红、真实仓库被登记出 `.worktrees/g-001-att-01`
+> 之类的夹具残留。守卫见 `core/tests/g363-scratch-isolation.test.ts`。
+
+> **跨平台实现约束（g-363 返工点，Windows 红线）**：`core/root.ts` 里带**路径参数**的 git 调用
+> 一律走参数**数组**签名 —— `_gitRunner.execFileSync("git", ["check-ignore", "-q", "--", "<相对路径>/"], …)`。
+> 字符串命令形式（`execSync("git … '…'")`）在 Windows 上单引号**不被 cmd.exe 剥离** ⇒ 引号成了路径
+> 的一部分 ⇒ `git check-ignore` 恒 `exit 1` ⇒ 被判「未忽略」⇒ scratch 判定失效、三个污染出口在
+> Windows 全部回归；另外 `relative()` 在 Windows 产出 `\`，匹配不上 `.gitignore` 里按 `/` 写的规则，
+> 故路径统一 `/` 分隔。两点都由纯函数 `checkIgnoreArgv()` 负责，守卫 A2 以**字符级**断言钉住
+> （参数数组不含引号、路径 `/` 分隔、含空格/单引号/非 ASCII 的目录端到端可用）。
+
+> **与 mem-73f84ba7（隔离实例的 DSH_HOME/workspace 必须落仓库 `tmp/` 内）如何共存**：两者不冲突，
+> 不需要二选一 —— `tmp/` 仍是沙盒可写的隔离区（该记忆的要求保留），而 g-363 让「落在 `tmp/` 里」
+> 等价于「是一个**独立看板**」：git-ignored ⇒ 独立项目根。此前的张力来自判定缺陷（`tmp/` 被误判成
+> linked worktree ⇒ 隔离实例实际读写真实看板），现已消除。
+>
+> 需要与主看板分离的数据时，仍可显式给绝对 `config.root`（例如在 `--host-dir` 指向的插件 profile
+> 的 `cordis.patch.yml` 里 patch）；对看板数据做破坏性验证前，先确认实例实际使用的 root
+> （看板端点 `_diagnostics.rootMode` / `canonicalWorkspace` 会如实回报）。
+
+## 4.1 在 linked worktree 内跑测试（正确姿势与限制）
+
+执行者按隔离纪律都在 `.worktrees/g-<goal>-att-<NN>` 里干活，跑测试的正确姿势是：
+
+```bash
+cd .worktrees/g-<goal>-att-<NN>
+ln -sfn ../../node_modules node_modules      # worktree 无 node_modules（gitignored）
+bash scripts/build.sh                        # 先产出 dist/（否则 dist/index.js 类导入全红）
+node --test core/tests/*.test.ts             # 与主树同一命令、同一口径
+```
+
+- **两种 TMPDIR 都必须全绿**：默认 `TMPDIR=/tmp` 与 `TMPDIR=<worktree>/tmp`（AGENTS.md 要求临时
+  文件写仓库 `tmp/`）。后者曾是 47 条假红的来源，命令可直接复现历史缺陷：
+  `TMPDIR="$PWD/tmp" node --test core/tests/*.test.ts`（修复前 47 fail，修复后 0 fail）。
+- **两条与「是否被污染」有关的环境前提**（属环境前提，不是断言面，已由测试自身按构造保证）：
+  `g347-help-asset-guard` 的镜像必须落在仓库外、`g355-mock-seed-shared-card` 的 mock 沙箱必须
+  不含 `/home/`、`/workspace/` 等敏感字样（seed 自带脱敏自检会（正确地）拒绝真实工作区路径）。
+  两者现在显式挑选合规的临时根，`TMPDIR` 落仓库内时同样绿。
+- **不要用「某次跑绿」当结论**：套件必须不留下真实仓库残留。判据是「跑完后真实仓库无新增
+  worktree 注册、真实 `.dsh-graph` 未被写入」这个**不变量**（`git worktree list` + 真实看板
+  文件不含本次唯一 marker），由 `core/tests/g363-scratch-isolation.test.ts` 钉住。
+- **发布门禁的权威证据口径不变**：发布/复核取数仍在**主工作树**做（`node --test core/tests/*.test.ts`）；
+  worktree 内跑绿是执行者的自检，不替代主树取数。主树跑之前必须确认 `dist/` 与源同步
+  （`dist-freshness-g312` 会拦：主树 dist 陈旧时该用例必红 —— 那是「主树该重建了」的信号，
+  不是代码回归；主树重建按 Build Isolation 纪律只在发布/复核的明确时点做）。
+- **实测（g-363 att-001，2026-09-29，同一 commit）**：
+
+| 口径 | 命令 | 结果 |
+|---|---|---|
+| worktree + `TMPDIR` 落 worktree | `TMPDIR=$PWD/tmp node --test core/tests/*.test.ts` | 1417 pass / **0 fail** / exit 0 |
+| worktree + 默认 `TMPDIR` | `node --test core/tests/*.test.ts` | 1417 pass / **0 fail** / exit 0 |
+| 主树（发布门禁口径） | `node --test core/tests/*.test.ts` | 1406 tests / 1405 pass / 1 fail（`dist-freshness-g312`：主树 `dist/` 相对源陈旧，**与本次改动无关**，重建后即绿） |
+
+  （1417 = 修复前 1415 + 返工时新增的 A2 字符级守卫、A3 调用形状守卫；主树一行是在**主树自己的
+  代码/测试**上取的，故仍为 1406。）
+  三条口径跑完后真实 `.dsh-graph/project.yaml`、`memory/memory.jsonl` md5 未变、
+  `git worktree list` 未变、`events.jsonl` 行数未增 —— 即「不污染真实看板」的不变量成立。
+  修复前同一命令（worktree + `TMPDIR` 落 worktree）为 **47 fail / 1359 pass / exit 1**。
+- **判别力（改坏即红，变异命令与统计范围写明）**：每个变异只改 `core/root.ts` **一处**，先用副本
+  备份、跑完按副本还原（还原后 `md5` 与备份逐字节一致）；两种统计范围都给出 ——
+  守卫文件全量 `node --test core/tests/g363-scratch-isolation.test.ts`（11 条）与
+  全量套件 `node --test core/tests/*.test.ts`（默认 `TMPDIR`，1417 条）：
+  - 变异 ①：scratch 边界改成恒假（`const isScratch = false;`）⇒ 守卫 **9/11 红**（仅「不误伤
+    linked worktree 根」「非 scratch 干净度」两条仍绿），全量 **1408 pass / 9 fail**；
+  - 变异 ②：撤「scratch 不进项目工作树」（`discoverGitWorktree` 对 scratch 仍返回 info）⇒
+    守卫 **7/11 红**，全量 **1410 pass / 7 fail**；
+  - 变异 ③：调用形状改回 shell 字符串命令（`execSync(\`git check-ignore …\`)`，即 Windows 失效
+    的那个形态）⇒ 守卫 **2/11 红**（A2 端到端 + A3 调用形状），全量 **1415 pass / 2 fail**
+    —— 在 POSIX 上也会因未转义引号而失败，A3 正是钉住「不许再写成字符串命令」的那条；
+  - 还原后守卫 **11/11 绿**、全量 **1417 pass / 0 fail**。
+  三次变异运行期间真实看板**零污染**：两条写入类不变量**在写入前**就断言失败（前置断言在前），
+  且 `project.yaml`/`memory.jsonl` md5 未变、`events.jsonl` 未增、无 `.worktrees/g-363-att-99`
+  注册、看板内无夹具 marker。
+- **已知限制（如实登记，本目标未收敛）**：REST 路由把写操作 actor **硬编码为 `human:gui`**
+  （`dsh-graph-host/index.js` 多处，如 `resolve-accept` / `transition` / `move-goal` / `add-card`）。
+  即「任何能访问该端口的本地调用都能以负责人名义写入」——因此在隔离失效时无法从事件流区分
+  「谁写的」。本地单机单用户场景下按可接受风险处理；若要收敛，需把 actor 由请求上下文派生
+  （独立目标再做）。
 
 ## 5. 常见报错
 
@@ -127,7 +220,7 @@ node --test core/tests/*.test.ts
 | `禁止透传受管参数：…` | 传了 `--profile` / `--dsh-home` / `--workspace` / `--patch` 等（§2.1） |
 | `不支持的参数：…` | 未知参数 |
 | `非法端口：…` / `拒绝端口 3080（生产 DSH web）` / `端口已占用：…` | 端口门禁（§2.1） |
-| `缺少 pnpx` / `缺少 node` / `缺少 realpath` | 基础命令缺失 |
+| `缺少 pnpm；请安装 pnpm 后重试` / `缺少 node` / `缺少 realpath` | 基础命令缺失 |
 | `已请求 --proxychains，但找不到 proxychains4` | `--proxychains` 但无 `proxychains4` |
 | `仓库 tmp symlink 越界：…` / `DSH_TEST_ROOT 必须位于 canonical … 下` | `tmp/` 或 `DSH_TEST_ROOT` 越过仓库 `tmp/` |
 | `无法 canonicalize 本地插件目录：…` / `--host-dir 必须位于仓库 dist、dsh-graph-host 或 .worktrees 下：…` | `--host-dir` 越界或不存在 |
@@ -148,7 +241,8 @@ node --test core/tests/*.test.ts
   现行脚本没有子命令、只有一个固定 `web` profile，也**不再切换主 profile**。
 - **`PUBLISHED_VER` 默认值 `^0.11.0` 是陈旧的锁定值，不是当前已发布版本。**
   它是该脚本自 v0.11.0 发布（commit `0c2230e`，2026-09-15）起再未更新的历史值；
-  **当前已发布版本是 v0.16.1**（见 [`README.md`](../README.md)「当前版本 v0.16.1」）。
+  **当前已发布版本是 v0.16.1**（见 [`README.md`](../README.md) 顶部「当前版本 v0.16.1」；
+  用户可见变更史见 [`CHANGELOG.md`](../CHANGELOG.md)）。
   该默认值只影响旧脚本的 `main-published` 子命令，与现行脚本无关。
 - 两者的设计不同，**不是同一工具的两个版本**：现行脚本按 DSH 版本启动单实例、以 `DSH_HOME`
   为隔离边界，并拒绝透传受管参数（§2.1）。

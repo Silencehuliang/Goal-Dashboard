@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync, mkdirSync } from "node:fs";
 import { resolve, relative, join, sep, dirname } from "node:path";
 import { appendEvent, readEvents, nowIso } from "./events.ts";
-import { discoverGitWorktree } from "./root.ts";
+import { discoverGitWorktree, isScratchWorkspace } from "./root.ts";
 import { findGoalFile, loadGoal } from "./ops.ts";
 import { GraphError } from "./machine.ts";
 
@@ -196,12 +196,26 @@ export type GitCleanlinessResult =
  *
  * 注：clean=null 只表示「拿不到可靠的干净度信号」。是否据此改变默认隔离，交由
  * {@link resolveWorktreeIsolationDecision} 结合可靠性语义裁定，见其注释。
+ *
+ * g-363：workspaceDir 若是**仓库内被 git 忽略的 scratch 目录**（仓库 `tmp/` 下的测试夹具、
+ * `tmp/dsh-test/<版本>/workspace` 隔离实例），它不属于任何仓库项目 —— `git status` 给出的是
+ * **外层仓库**的干净度，属于答非所问，一律按 clean=null（探测不可靠）返回，绝不伪称干净。
  */
 export function detectWorkspaceCleanliness(
   workspaceDir: string,
   gitRunner?: (cwd: string, args: string[]) => string,
 ): GitCleanlinessResult {
   const runner = gitRunner ?? git;
+  try {
+    if (isScratchWorkspace(resolve(workspaceDir))) {
+      return {
+        clean: null,
+        error: `workspace 是仓库内 git-ignored 的 scratch 目录（${workspaceDir}），不属于该仓库项目，无法判定干净度`,
+      };
+    }
+  } catch {
+    // 发现失败不影响原有探测路径（下面按原逻辑走 git status）
+  }
   try {
     const out = runner(workspaceDir, ["status", "--porcelain"]);
     if (out.trim() === "") {

@@ -7,8 +7,8 @@
  * 主管据此误判「没有机器快速放行通道」——属「文档落后于引擎」的静默失效。
  * 本套件把「帮助资产 = 引擎 schema 的投影」变成机器断言：引擎加参数/加工具而帮助没跟 → 必红。
  *
- * 断言面（真源固定为 `apply()` 实际注册的 tool def，不硬编码 44 名单）：
- *  A. 工具集合：schema 44 个 graph_* 工具与 zh/en 两份帮助的条目**逐一相等**（不缺、不多、不重复），
+ * 断言面（真源固定为 `apply()` 实际注册的 tool def，不硬编码 49 名单）：
+ *  A. 工具集合：schema 49 个 graph_* 工具与 zh/en 两份帮助的条目**逐一相等**（不缺、不多、不重复），
  *     且两份帮助的条目**顺序一致**；文件头声明的工具计数与 schema 实数一致；
  *  B. 参数面：每个工具帮助行必须提及该工具 schema 的**全部**参数名（zh/en 双向），
  *     且**可选性必须与 schema 一致**（必填不带方括号、可选必须带方括号）；
@@ -37,6 +37,9 @@
  *     「计数语境」数字时只判定它们（`dsh-graph v0.16.0 …` 头部由 RED 变 GREEN；缺声明/数字写错仍红）。
  *  R3 测试 E 去 tmp 依赖：镜像改建在 `os.tmpdir()` 并符号链接仓库 `node_modules`（供 yaml 解析），
  *     不再需要仓库内可写的 `tmp/` ⇒ 只读检出也能跑；`finally` 负责清理、异常退出不落仓库残留。
+ *     g-363 补：`os.tmpdir()` 本身可能被设为仓库内 `tmp/`（AGENTS.md 临时文件纪律），
+ *     故镜像根改由 `outOfRepoTempBase()` 显式挑一个仓库外的临时根 —— R3 前提按构造成立，
+ *     「镜像不得落在仓库内」断言一字未改。
  *
  * 结构性例外（唯一）：`graph_unbind_goal_child` 的 `{attempt|child_id}` 是「二者恰取其一」的
  * one-of 记号（schema 中两者均为可选，运行时由引擎 `if (hasAtt === hasChild) throw` 校验恰好其一）
@@ -50,11 +53,37 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { apply } from "../../dist/index.js";
 
 const repoRoot = join(import.meta.dirname, "../..");
+
+/**
+ * g-363：选一个**确定位于仓库之外**的临时根。
+ *
+ * 为什么需要：R3（见测试 E）要求镜像落在仓库外，只读检出也能跑；而 `os.tmpdir()` 可能被设为
+ * 仓库内 `tmp/`（AGENTS.md 要求临时文件写仓库 `tmp/`）⇒ 该 R3 前提从「碰巧成立」变成「不成立」。
+ * 这里显式把一个仓库外、可写的临时根挑出来，让前提**按构造成立**；测试 E 原有的
+ * 「镜像不得落在仓库内」断言一字未改（判别力不降：若把本函数改回 `tmpdir()`，断言立刻变红）。
+ */
+function outOfRepoTempBase(): string {
+  const repoPrefix = `${resolve(repoRoot)}/`;
+  const candidates = [process.env.DSH_G347_OUTSIDE_TMP, "/tmp", process.env.TEMP, process.env.TMP, tmpdir()];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const base = resolve(raw);
+    if (`${base}/`.startsWith(repoPrefix)) continue; // 仓库内 → 不满足 R3 前提
+    try {
+      const probe = mkdtempSync(join(base, "dsh-graph-g347-probe-"));
+      rmSync(probe, { recursive: true, force: true });
+      return base;
+    } catch {
+      // 不可写 → 试下一个候选
+    }
+  }
+  return tmpdir();
+}
 const SOURCE_HELP = {
   zh: join(repoRoot, "dsh-graph-host", "prompts", "help.zh.md"),
   en: join(repoRoot, "dsh-graph-host", "prompts", "help.en.md"),
@@ -386,9 +415,9 @@ const help = {
   en: { text: readFileSync(SOURCE_HELP.en, "utf8"), entries: parseHelp(readFileSync(SOURCE_HELP.en, "utf8")) },
 };
 
-test("A1 schema 恰为 44 个 graph_* 工具，且名字唯一", () => {
-  assert.equal(defs.length, 44, `引擎注册的 graph_* 工具数应为 44，实际 ${defs.length}`);
-  assert.equal(new Set(defs.map((d) => d.name)).size, 44, "引擎工具名存在重复");
+test("A1 schema 恰为 49 个 graph_* 工具，且名字唯一", () => {
+  assert.equal(defs.length, 49, `引擎注册的 graph_* 工具数应为 49，实际 ${defs.length}`);
+  assert.equal(new Set(defs.map((d) => d.name)).size, 49, "引擎工具名存在重复");
 });
 
 test("A2 zh/en 帮助条目与 schema 工具集合逐一相等（不缺/不多/不重复），且 zh/en 结构对称", () => {
@@ -396,7 +425,7 @@ test("A2 zh/en 帮助条目与 schema 工具集合逐一相等（不缺/不多/�
     assert.deepEqual(structureProblems(help[lang].entries, defs, lang), [], `help.${lang}.md 结构面不一致`);
     // 原判别力显式保留：条目数、唯一性、集合相等
     const names = help[lang].entries.map((e) => e.name);
-    assert.equal(names.length, 44, `help.${lang}.md 条目数应为 44，实际 ${names.length}`);
+    assert.equal(names.length, 49, `help.${lang}.md 条目数应为 49，实际 ${names.length}`);
     assert.equal(new Set(names).size, names.length, `help.${lang}.md 存在重复条目`);
     assert.deepEqual([...names].sort(), [...defs.map((d) => d.name)].sort(), `help.${lang}.md 与 schema 工具集合不一致`);
   }
@@ -479,9 +508,10 @@ function linkDependencies(mirrorRoot: string): boolean {
 }
 
 test("E 加载机制：资产为每次调用读取，改动后同一模块实例立即生效（无需重启宿主）", async () => {
-  // R3：镜像落在 os.tmpdir()，**不**依赖仓库内可写的 tmp/ ⇒ 只读检出也能跑；
-  // 镜像里的 dist/core/ops.js 需要解析 `yaml`，故把镜像根 node_modules 链接到仓库的 node_modules。
-  const mirrorRoot = mkdtempSync(join(tmpdir(), "dsh-graph-g347-mirror-"));
+  // R3：镜像落在**仓库外**的临时目录（`outOfRepoTempBase()` 显式挑选，g-363），**不**依赖
+  // 仓库内可写的 tmp/ ⇒ 只读检出也能跑；镜像里的 dist/core/ops.js 需要解析 `yaml`，
+  // 故把镜像根 node_modules 链接到仓库的 node_modules。
+  const mirrorRoot = mkdtempSync(join(outOfRepoTempBase(), "dsh-graph-g347-mirror-"));
   try {
     assert.ok(
       !mirrorRoot.startsWith(repoRoot + "/"),

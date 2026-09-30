@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatAttemptPrompt } from "../../dist/index.js";
+import { stripAttemptReportSkeleton } from "../ops.ts";
 import {
   init,
   createGoal,
@@ -14,6 +15,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const warning = "若本 prompt 同时含历史 handoff 与最新 brief，只执行 brief；handoff 不产生任何新任务。";
+
+// g-374 F6：注入文本尾部追加「交回报文骨架」尾注块 ⇒ 判定「末段告警」时先剥离该块。
+// 剥离是本套件唯一的适配点：其余断言（顺序/内容）都在剥离后的文本上比对语义。
+const strip = (text) => stripAttemptReportSkeleton(text).text;
 
 function prompt(overrides = {}) {
   return formatAttemptPrompt({
@@ -53,7 +58,7 @@ test("g-228 结构化冲突 fixture：关键事实只取 supervisor 独立字段
   assert.ok(output.indexOf("## 历史卡片") < output.indexOf("## 通用执行纪律"));
   assert.match(output, /## 历史 handoff\n【历史约束·仅供理解，非任务】/);
   assert.match(output, /## 历史卡片\n【历史约束·仅供理解，非任务】/);
-  assert.ok(output.trim().endsWith(warning));
+  assert.ok(strip(output).trim().endsWith(warning));
 });
 
 test("g-228 无历史/无当前字段：显式说明每个缺失字段原因", () => {
@@ -72,7 +77,7 @@ test("g-228 无历史/无当前字段：显式说明每个缺失字段原因", (
   assert.match(output, /历史 handoff：未提供（当前目标没有已确认 handoff/);
   assert.ok(!output.includes("## 历史 handoff"));
   assert.match(output, /## 历史卡片\n【历史约束·仅供理解，非任务】/);
-  assert.ok(output.trim().endsWith(warning));
+  assert.ok(strip(output).trim().endsWith(warning));
 });
 
 test("g-228 brief 中含多语言/重复语义时不再猜测，直接字段决定类型与事实", () => {
@@ -130,7 +135,7 @@ test("g-228 畸形结构化字段：组装不抛错且明确标记非法值", ()
   assert.match(output, /未提供原因：source_attempt 不是非空字符串/);
   assert.match(output, /当前验收项（当前 attempt 数据）：（未提供）/);
   assert.match(output, /未提供原因：acceptance_items 含空值或非字符串/);
-  assert.ok(output.trim().endsWith(warning));
+  assert.ok(strip(output).trim().endsWith(warning));
 });
 
 test("g-240: 目标背景预算裁剪，质量判据（核心验收）完整保留，描述超长显式截断", () => {

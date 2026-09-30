@@ -130,14 +130,24 @@ import {
   normalizeSubagentRole,
   toolFilterForRole,
   formatPmPrompt,
+  formatSummaryPrompt,
+  formatAttemptReportSkeleton,
+  goalResultsDigest,
+  renderGoalResultsDigest,
   validateSchema,
   schemaErrorResponse,
   settingsPostSchema,
   unbindPostSchema,
   unbindGoalChild,
+  authorizeSharedCardLink,
   abandonAttemptPostSchema,
   abandonAttempt,
   getCachedBoardPayload,
+  writeAttemptResults,
+  refreshGoalResults,
+  goalResultsSummaryFile,
+  goalResultsCacheState,
+  ATTEMPT_RESULTS_MAX_BYTES,
   versionGoals,
   backlogGoals,
   matchIfNoneMatch,
@@ -145,7 +155,7 @@ import {
   closeWatchers,
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
-import { readEvents } from "./core/events.js";
+import { readEvents, appendEvent } from "./core/events.js";
 import { sT } from "./lib/server-i18n.js";
 // g-133：接入 DSH profile 级用户设置（dsh-settings）。为避免在 @deepseek-ai/* 不可解析的上下文
 // （工作树 link、仅 headless、无 settings 供应商的组合）导致整个插件加载失败、拖垮 GUI，
@@ -698,7 +708,8 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     promptText(modeStrategySection) ? protectPromptMarkers(modeStrategySection) : "",
     promptText(worktreeBlock) ? protectPromptMarkers(worktreeBlock) : "",
   ].filter(Boolean).join("\n");
-  return [position, current, targetContext ? "## Goal context\n" + protectPromptMarkers(targetContext) : "", override, ...history, discipline, "If a prompt contains a historical handoff and a current brief, execute only the current brief."].filter(Boolean).join("\n\n");
+  // g-374 F6：交回报文骨架 = 注入文本的**尾注**（单一真源 core/ops.ts；剥离本块后其余字节与基线全同）。
+  return [position, current, targetContext ? "## Goal context\n" + protectPromptMarkers(targetContext) : "", override, ...history, discipline, "If a prompt contains a historical handoff and a current brief, execute only the current brief.", formatAttemptReportSkeleton("en")].filter(Boolean).join("\n\n");
 }
 
 /** 统一组装 supervisor 执行 attempt prompt，避免两处派发顺序漂移。 */
@@ -778,7 +789,8 @@ export function formatAttemptPrompt({
   history.push(historicalPromptBlock("## 历史卡片", cards));
   const discipline = formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection });
   const structuredStateInstruction = "【结构化状态字段】每次调用 graph_report_status 除 status 外必须传 state，且只能是 working、blocked、done、error；看板状态判定优先读取该字段，status 文本仅供展示。";
-  return [positioning, current.join("\n"), modeStrategySection, override, ...history, structuredStateInstruction, discipline, ATTEMPT_PROMPT_WARNING]
+  // g-374 F6：交回报文骨架 = 注入文本的**尾注**（单一真源 core/ops.ts；剥离本块后其余字节与基线全同）。
+  return [positioning, current.join("\n"), modeStrategySection, override, ...history, structuredStateInstruction, discipline, ATTEMPT_PROMPT_WARNING, formatAttemptReportSkeleton("zh")]
     .filter((section) => section && section.trim())
     .join("\n\n");
 }
@@ -1137,6 +1149,210 @@ export function apply(ctx, config) {
     if (sid && readSupervisorSession(root) === sid) return `supervisor:${sid}`;
     return actorOf(ex);
   };
+  // g-369：owner 判定的唯一输入——目标创建者（meta.created_by）。只读；目标不存在时由 findGoalFile 抛错。
+  const goalCreatedBy = (root, goalId) => loadGoal(findGoalFile(root, goalId)).meta.created_by;
+
+  // ---- g-374 F1：attempt 完成摘要的零 token 截获（宿主生命周期事件，非 LLM / 非轮询 / 非 fs watcher）----
+  // 数据源唯一正解：`ctx.on("subagent/end", info)` 的 `info.lastAssistantMessage`（ContentBlock[]，
+  // 宿主已折好的「最后一条非空 assistant 消息」，纯函数选择规则，零 LLM）。`info.id` = durable childId
+  // = attempt.md 的 meta.child_id ⇒ 用下面这个内存 Map 精确归因（**Map miss 绝不瞎猜归属**）。
+  // 只在 executor 派发点登记；collect / spawn 派发点不登记（它们不是 attempt）。
+  const childAttemptIndex = new Map();
+  const CHILD_ATTEMPT_INDEX_CAP = 512;
+  const indexChildAttempt = (childId, entry) => {
+    if (!childId) return;
+    // 重绑/重发指令 → 同一 childId 只保留最新归属；LRU 上界防长跑进程映射无界增长。
+    childAttemptIndex.delete(childId);
+    childAttemptIndex.set(childId, entry);
+    while (childAttemptIndex.size > CHILD_ATTEMPT_INDEX_CAP) {
+      const oldest = childAttemptIndex.keys().next().value;
+      if (oldest === undefined) break;
+      childAttemptIndex.delete(oldest);
+    }
+  };
+  // Map miss 的留痕策略见 captureAttemptResults：**纯 stderr**，不写看板事件流
+  // （F1 复核注记③：对所有非 attempt 子代理记账 ⇒ 事件流噪声无界增长且不可归因）。
+
+  // ---- g-374 F5：LLM 详情摘要（专用 summarizer 子代理）----
+  // 归因红线：summarizer 是**子代理**，但**绝不**进 childAttemptIndex（它不写 results-att-*.md），
+  // 另外单独索引，用于：① child 结束时判断它是否已落盘 LLM 正文；② 未落盘 ⇒ 降级写 deterministic。
+  const summarizerIndex = new Map();
+  const SUMMARIZER_LABEL_PREFIX = "graph:summarize-results/";
+  const indexSummarizerChild = (childId, entry) => {
+    if (!childId) return;
+    summarizerIndex.delete(childId);
+    summarizerIndex.set(childId, { landed: false, spawnedAt: new Date().toISOString(), ...entry });
+    while (summarizerIndex.size > CHILD_ATTEMPT_INDEX_CAP) {
+      const oldest = summarizerIndex.keys().next().value;
+      if (oldest === undefined) break;
+      summarizerIndex.delete(oldest);
+    }
+  };
+
+  /**
+   * g-374 F5（复核 BLOCK-1 返工）：把某目标下**全部仍待结束**的 summarizer 项标记为「已落盘正文」。
+   *
+   * 反例（复核实测）：summarizer 已成功落盘 LLM 正文，但在它结束前历史发生变化（例如一条
+   * `attempt.status_reported` 就足以改变 `source_hash`）⇒ 用 `cache_hit` 判断「本次是否已落盘」
+   * 会得出 false ⇒ child 结束时用 deterministic **覆盖刚产出的 LLM 正文**，并把 `fallback_reason`
+   * 写成 `subagent-end: completed`，界面显示「LLM 摘要失败」——LLM 实际成功，是虚假失败提示。
+   * 落盘路径都会调用本函数（无竞态：落盘与 child 结束都在事件/工具回调侧，按先后顺序执行）。
+   *
+   * **粒度说明（复核注记 2）**：按 **goal** 标记，因此会把该目标下**所有**仍待结束的项一起标记，
+   * 而不只是刚落盘那个 child。选择 goal 粒度而非 child 精度的理由：①落盘路径（工具/REST）此时
+   * 并不知道自己对应哪个 childId（正文由子代理经工具回传，工具参数里没有 child_id），要精确标记
+   * 只能反查「哪个 child 正在写这个目标」，反而引入新的时序假设；②同一目标正常只有一个在飞
+   * summarizer（再次点击会先命中缓存或由用户 force）；③越界标记的后果是**良性**的——同目标已经
+   * 有了更新的外部正文，此时不降级是更安全的一侧（少一次覆盖、少一次浪费的调用），最坏情况是
+   * 某个真正失败的 child 不再写 deterministic 兜底，而那份正文仍在、用户在 GUI 上仍可再次触发。
+   */
+  const markSummarizerLanded = (goal) => {
+    if (!goal) return 0;
+    let n = 0;
+    for (const entry of summarizerIndex.values()) {
+      if (entry?.goal !== goal || entry.landed === true) continue;
+      entry.landed = true;
+      entry.landedAt = new Date().toISOString();
+      n += 1;
+    }
+    return n;
+  };
+
+  // 统一的 summarizer 派发（REST 与工具共用）：材料包零 LLM 生成 → role=summarizer 子代理 → 登记索引。
+  // 模型通道：沿用宿主子代理机制与既有模型路由（resolveModelRoute：executor 覆盖 > project.yaml > 全局），
+  // **不直连 HTTP、不自带凭据**。
+  const startSummarizerChild = async (root, goal, { parent, signal }, opts = {}) => {
+    const goalFile = findGoalFile(root, goal);
+    if (basename(goalFile) !== "goal.md") {
+      return { childId: null, error: `暂存目标（backlog）没有目标目录，无法生成完成摘要：${goal}` };
+    }
+    const ws = opts.workspace ?? dirname(root);
+    const goalRel = relative(ws, goalFile);
+    const digest = renderGoalResultsDigest(goalResultsDigest(goalDetail(root, goal)));
+    const prompt = formatSummaryPrompt({
+      goalId: goal, goalRel, digest,
+      language: resolvePromptLanguage(readGraphSettings().promptLanguage, ctx),
+    });
+    const eff = resolveModelRoute(
+      { provider: opts.provider, model: opts.model, reasoning_effort: opts.reasoning_effort },
+      readExecutorModel(root),
+      readGraphSettings(),
+    );
+    const subagents = ctx.get?.("subagents");
+    if (!subagents || !parent) return { childId: null, error: "subagents 服务不可用或无调用 agent", digest };
+    const provider = (subagents.list?.() ?? []).find((n) => {
+      try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
+    });
+    if (!provider) {
+      return { childId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`, digest };
+    }
+    const toolFilter = toolFilterForRole("summarizer", opts.mode);
+    const request = { parent, prompt: text(prompt), ...(toolFilter ? { toolFilter } : {}) };
+    const agentOptions = {};
+    if (eff.provider) agentOptions.provider = eff.provider;
+    if (eff.model) agentOptions.model = eff.model;
+    if (eff.reasoning_effort) agentOptions.reasoningEffort = eff.reasoning_effort;
+    if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
+    try {
+      const started = await subagents.startContinuable({
+        provider, label: `${SUMMARIZER_LABEL_PREFIX}${goal}`, request, signal,
+      });
+      indexSummarizerChild(started.childId, { root, goal, actor: opts.actor ?? "system:summarizer" });
+      return {
+        childId: started.childId, error: null, digest,
+        model_route: (eff.provider || eff.model) ? `${eff.provider ?? "继承"}/${eff.model ?? "继承"}` : null,
+      };
+    } catch (e) {
+      return { childId: null, error: subagentSpawnErrorText(e), digest };
+    }
+  };
+
+  /** child 结束但没落盘 LLM 正文 ⇒ 降级：写 deterministic + fallback_reason（界面据此提示已回退）。 */
+  const summarizeFallbackWrite = (entry, reason) => {
+    try {
+      // ① 精确信号：本次 spawn 对应的 child 已落盘正文（markSummarizerLanded）⇒ 绝不降级。
+      if (entry?.landed === true) return;
+      const cache = goalResultsCacheState(entry.root, entry.goal);
+      if (cache.cache_hit) return; // ② 历史未变且已是 LLM 版（也可能是并发成功）⇒ 不覆盖
+      // ③ 兜底：历史在落盘**之后**又变化 ⇒ cache_hit=false，但当前文件确实是本次 spawn 之后产出的
+      //    LLM 正文（写盘时间不早于 spawn 时间）⇒ 同样视为已落盘，不得覆盖成 deterministic。
+      const spawnedAt = Date.parse(String(entry?.spawnedAt ?? ""));
+      const generatedAt = Date.parse(String(cache.generated_at ?? ""));
+      if (cache.exists && cache.source === "llm" && Number.isFinite(spawnedAt) && Number.isFinite(generatedAt)
+        && generatedAt >= spawnedAt) return;
+      refreshGoalResults(entry.root, entry.goal, {
+        actor: entry.actor ?? "system:summarizer-fallback",
+        fallbackReason: reason,
+      });
+    } catch { /* 降级失败也不影响结算 */ }
+  };
+
+  /**
+   * g-374：`subagent/end` 回调——**必须在事件回调侧完成截获与写入**。
+   * 实测（card-fe88f5ef §0）：事件在 spawn 后 1.5–4.3s 到达，父轮次先结束不会取消事件但会丢观测窗口
+   * ⇒ 任何依赖父轮次存活的写入都会静默丢结果。本回调整体 try/catch：**绝不影响子代理结算**。
+   */
+  const captureAttemptResults = (info) => {
+    try {
+      const childId = typeof info?.id === "string" && info.id ? info.id : null;
+      // g-374 F5 归因红线：summarizer 子代理**先**在这里被截住——它绝不是 attempt 执行者：
+      // 不写 results-att-*.md、不写 attempt.* 事件、不产生任何看板噪声；只在「没落盘 LLM 正文」时降级。
+      const sumEntry = childId ? summarizerIndex.get(childId) : null;
+      if (sumEntry) {
+        summarizerIndex.delete(childId);
+        const stop = typeof info?.stopReason === "string" ? info.stopReason : "?";
+        summarizeFallbackWrite(sumEntry, `subagent-end: ${stop}`);
+        return;
+      }
+      const entry = childId ? childAttemptIndex.get(childId) : null;
+      if (!entry) {
+        // 宿主重启后冷恢复的 child / 非 executor 派发的 child（收集/spawn/普通子代理）：归属未知
+        // ⇒ 不写文件、不猜归属。
+        // g-374 F3（F1 复核注记③）：**降为纯 stderr**——此前对**所有**非 attempt 子代理都记
+        // `console.warn` + `attempt.results_skipped` 事件，事件流噪声无界增长；归属未知本就不可
+        // 归因到具体目标，写进看板事件流只会污染负责人看板。保留 stderr 便于诊断。
+        try {
+          const stop = typeof info?.stopReason === "string" ? info.stopReason : "?";
+          process.stderr.write(`[dsh-graph] g-374 subagent/end 未登记 child=${childId ?? "(none)"} stop=${stop} —— 跳过完成摘要（不猜归属，纯 stderr 留痕）\n`);
+        } catch { /* 忽略 */ }
+        return;
+      }
+      if (info?.local === false) return; // 本项目只用 continuable 子代理（local 恒 true）
+      // 特性探测：payload 既无 lastAssistantMessage 也无 stopReason ⇒ 宿主未提供该 event 的 g-374 载荷，
+      // 静默降级（不写文件、不抛错）。有 stopReason 但缺文本 ⇒ 是「子代理无输出」占位（可区分）。
+      const hasField = Object.prototype.hasOwnProperty.call(info ?? {}, "lastAssistantMessage");
+      const stopReason = typeof info?.stopReason === "string" && info.stopReason ? info.stopReason : null;
+      if (!hasField && stopReason === null) return;
+      const blocks = Array.isArray(info?.lastAssistantMessage) ? info.lastAssistantMessage : null;
+      const text = blocks
+        ? blocks.filter((b) => b && b.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n")
+        : "";
+      writeAttemptResults(entry.root, {
+        goal: entry.goal,
+        attempt: entry.attempt,
+        source: "subagent/end",
+        childId,
+        stopReason,
+        text,
+        actor: entry.actor ?? "system:subagent/end",
+      });
+    } catch (e) {
+      try { console.warn("[dsh-graph] g-374 完成摘要截获失败（已忽略，不影响结算）:", e?.message ?? e); } catch { /* 忽略 */ }
+    }
+  };
+
+  /** g-374：child_error 分支占位（无子代理 ⇒ 永远不会有 subagent/end 事件，必须在派发处补齐）。 */
+  const writeChildErrorResults = (rootForWrite, goalId, attemptId, actor, note) => {
+    try {
+      writeAttemptResults(rootForWrite, {
+        goal: goalId, attempt: attemptId, source: "child_error", childId: null,
+        stopReason: null, text: null,
+        reason: note ? `child-error: ${note}` : "child-error: subagents 服务不可用或无调用 agent",
+        actor: actor || "system:dispatch",
+      });
+    } catch { /* 绝不打断派发 */ }
+  };
+
   // g-190：子代理活跃度探测（live registry 权威）。
   // 返回 "running"（正运行）/ "idle"（已加载未运行）/ "gone"（不在 live registry）/ "unknown"（registry 不可用）。
   const childLiveState = (childId) => {
@@ -1395,6 +1611,8 @@ export function apply(ctx, config) {
 
     // 9. 启动与绑定子代理
     if (providerError) {
+      // g-374 F1：child_error 占位（无 provider ⇒ 无子代理 ⇒ 永不产生 subagent/end）。
+      writeChildErrorResults(root, goal, attempt, actor, `无可用 provider：${providerError}`);
       return {
         ok: true,
         attempt,
@@ -1468,6 +1686,9 @@ export function apply(ctx, config) {
           );
         }
 
+        // g-374 F1：登记归因（childId → attempt）——只在此 executor 派发点登记。
+        indexChildAttempt(started.childId, { root, goal, attempt, actor });
+
         return {
           ok: true,
           attempt,
@@ -1484,6 +1705,8 @@ export function apply(ctx, config) {
           prompt,
         };
       } catch (e) {
+        // g-374 F1：child_error 占位（含 g-237 绑定失败收敛路径）。
+        writeChildErrorResults(root, goal, attempt, actor, `subagent 派发失败：${e?.message ?? e}`);
         return {
           ok: true,
           attempt,
@@ -1503,6 +1726,8 @@ export function apply(ctx, config) {
         };
       }
     } else {
+      // g-374 F1：subagents 服务不可用 / 无调用 agent（此分支 child_error 恒 null，最易漏）。
+      writeChildErrorResults(root, goal, attempt, actor, "subagents 服务不可用或无调用 agent");
       return {
         ok: true,
         attempt,
@@ -1623,6 +1848,56 @@ export function apply(ctx, config) {
       run: (a, ex) => { convertSharedToOwned(rootFor(ex), a.goal, a.card, { actor: actorOf(ex) }); return { ok: true }; },
     },
     {
+      // g-369：把共享池中既有共享卡挂载到另一个目标（复用已收集的上下文，与「创建时即成共享」互补）。
+      // 授权复用 authorizeSharedCardLink（与解绑同口径的 owner/主管模型），先鉴权后调用 ops ⇒ 拒绝零副作用；
+      // 事件 actor 用 unbindActorOf 映射（主管会话 → supervisor:<sid>）。ops.addSharedCardRef 原生幂等。
+      def: {
+        name: "graph_attach_shared_card",
+        description: sT("tool.graph_attach_shared_card"),
+        parameters: params({ goal: str, card: str }, ["goal", "card"]),
+      },
+      run: (a, ex) => {
+        const root = rootFor(ex);
+        const actor = unbindActorOf(ex, root);
+        authorizeSharedCardLink(root, actor, goalCreatedBy(root, a.goal));
+        addSharedCardRef(root, a.goal, a.card, actor);
+        return { ok: true, card: a.card, refCount: referenceCount(root, a.card) };
+      },
+    },
+    {
+      // g-369：解除目标对共享卡的引用（卡本体保留在共享池，零引用也不删除）。
+      def: {
+        name: "graph_detach_shared_card",
+        description: sT("tool.graph_detach_shared_card"),
+        parameters: params({ goal: str, card: str }, ["goal", "card"]),
+      },
+      run: (a, ex) => {
+        const root = rootFor(ex);
+        const actor = unbindActorOf(ex, root);
+        authorizeSharedCardLink(root, actor, goalCreatedBy(root, a.goal));
+        removeSharedCardRef(root, a.goal, a.card, actor);
+        return { ok: true, card: a.card, refCount: referenceCount(root, a.card) };
+      },
+    },
+    {
+      // g-369：只读列出共享池（供主管组装新目标/并行目标时挑选可复用的共享卡）。
+      // 只投影 id/title/status/refs——sharedCards() 每项含 content（全文正文）、attachments 与
+      // cardFile（绝对路径），裸返会灌 token 并泄露绝对路径。不鉴权（只读）。
+      def: {
+        name: "graph_list_shared_cards",
+        description: sT("tool.graph_list_shared_cards"),
+        parameters: params({}, []),
+      },
+      run: (a, ex) => ({
+        cards: sharedCards(rootFor(ex)).map((c) => ({
+          id: c.id,
+          title: c.title,
+          status: c.status,
+          refs: (c.referencingGoals ?? []).map((g) => g.id),
+        })),
+      }),
+    },
+    {
       // g-150：主管登记 attempt handoff（返工约束、前序失败、推荐基线、验收命令）。
       // 只有已 claim 的 supervisor 或负责人应调用；写入 handoff 文件 + 追加确认事件。
       def: {
@@ -1709,6 +1984,135 @@ export function apply(ctx, config) {
         const r = rootFor(ex);
         appendGoalComment(r, a.goal, a.text, actorOf(ex));
         return { ok: true, goal: a.goal };
+      },
+    },
+    {
+      // g-374 F4：无子代理的轻量改动（chore/patch、一两行修改、文档/看板数据修订）必须也有结果面。
+      // 主管自己做完成摘要 ⇒ 与 F1 自动截获**同一写入器**（同格式/同路径/同覆盖策略），零 LLM 调用。
+      def: {
+        name: "graph_write_results",
+        description: "写入一次 attempt 的完成摘要（<goalDir>/results-att-<attempt>.md）：供主管/用户在**无子代理**的轻量改动（chore/patch、一两行修改、文档或看板数据修订）后主动补写结果，避免结果真空。与自动截获同一写入器/同一格式/同一路径；文件头标注 source（默认 manual）与写入者。零 LLM 调用（纯文本落盘）。同一 attempt 重复调用 = last-wins 覆盖同一文件（每次写入都追加 attempt.results_written 事件）。",
+        parameters: params({ goal: str, attempt: str, text: str, source: str, actor: str }, ["goal", "attempt", "text"]),
+      },
+      run: (a, ex) => {
+        if (!a.goal || !a.attempt) throw new GraphError("graph_write_results 缺参：需要 goal/attempt/text");
+        if (typeof a.text !== "string" || !a.text.trim()) throw new GraphError("graph_write_results：text 不能为空（空文本请改用自动截获的占位路径）");
+        const r = rootFor(ex);
+        // 一一对应不变式（判据 3）：`results-<attempt>.md` 只对**真实存在的 attempt** 写入，
+        // 不制造孤儿结果文件；无 attempt 的轻量改动走 graph_refresh_results（results.md）。
+        const goalFile = findGoalFile(r, a.goal);
+        if (basename(goalFile) !== "goal.md") throw new GraphError(`暂存目标（backlog）没有目标目录，无法写完成摘要：${a.goal}`);
+        if (!existsSync(join(dirname(goalFile), "attempts", a.attempt, "attempt.md"))) {
+          throw new GraphError(`attempt 不存在：${a.goal}/${a.attempt}（不制造孤儿结果文件）；无 attempt 的轻量改动请用 graph_refresh_results 刷新 results.md`);
+        }
+        const res = writeAttemptResults(r, {
+          goal: a.goal,
+          attempt: a.attempt,
+          source: typeof a.source === "string" && a.source.trim() ? a.source : "manual",
+          childId: null,
+          stopReason: null,
+          text: a.text,
+          actor: typeof a.actor === "string" && a.actor.trim() ? a.actor : actorOf(ex),
+        });
+        if (!res.written) throw new GraphError(`graph_write_results 写入失败：${res.reason ?? "unknown"}`);
+        return { ok: true, ...res };
+      },
+    },
+    {
+      // g-374 F2/F3：从目标历史零 LLM 重写 results.md（旧版归档）+ 批量。UI「更新摘要」按钮走同一实现。
+      def: {
+        name: "graph_refresh_results",
+        description: "重写 <goalDir>/results.md（规范化完成摘要）；旧版先归档为 results-archive-YYYYMMDDTHHMMSS.md（保留历史，不删不覆盖），每次调用都重写 + 归档；写入器**自身零 LLM 调用**（LLM 正文由专用 summarizer 子代理产出后经 content 传入）。四种用法：①`llm:true` ⇒ 派发**专用摘要子代理**（role=summarizer）结合目标详情写「具体改了什么 / 影响面 / 值得注意」，落盘后 `source=llm`；以 `source_hash`（历史指纹）为缓存键，历史未变且已有 llm 摘要 ⇒ 直接命中缓存不再调用（`force:true` 强制重来）；子代理不可用/失败 ⇒ 自动降级为机器摘要并标注 `source=deterministic`；②省略 content/llm ⇒ 由目标历史（评论 / 最近指令 / attempt 与其结果文件 / 事件流 + 目标描述要点）**零 LLM 拼装**兜底正文；③传 content ⇒ 采用调用方产出的正文（source=manual：人工手写）；④支持单目标（goal）与批量（goals[]），批量逐目标报告 written/skipped/failed/pending/cached，单目标失败不中断整批。目标无评论/无指令/无 attempt 且无 content 时优雅跳过（不写空文件）。**主管自做 chore/patch 等无子代理改动后应主动调用；要 LLM 详情级摘要时传 llm:true**。",
+        parameters: params({ goal: str, goals: strArr, content: str, source: str, llm: { type: "boolean" }, force: { type: "boolean" }, actor: str }, []),
+      },
+      run: (a, ex) => {
+        const list = [];
+        if (typeof a.goal === "string" && a.goal.trim()) list.push(a.goal.trim());
+        if (Array.isArray(a.goals)) for (const g of a.goals) if (typeof g === "string" && g.trim()) list.push(g.trim());
+        const targets = [...new Set(list)];
+        if (targets.length === 0) throw new GraphError("graph_refresh_results 缺参：需要 goal（单目标）或 goals[]（批量）");
+        const r = rootFor(ex);
+        const actor = typeof a.actor === "string" && a.actor.trim() ? a.actor.trim() : actorOf(ex);
+        // g-374 F5：按需调用 LLM——只在调用方**显式** llm:true 时派 summarizer 子代理。
+        // 绝不挂在派发/结算/截获路径上自动调用；批量逐目标独立，单目标失败/降级不牵连其它目标。
+        if (a.llm === true) {
+          if (typeof a.content === "string" && a.content.trim()) {
+            throw new GraphError("graph_refresh_results：llm 与 content 不能同时使用（content 已是成品正文，不需要再调 LLM）");
+          }
+          // LLM 分支是唯一的异步路径：返回 Promise（宿主 await）；确定性路径保持同步返回，
+          // 免得既有同步调用方（批量/测试/内部复用）被迫改成 async。
+          return (async () => {
+          const items = [];
+          for (const g of targets) {
+            try {
+              const cache = goalResultsCacheState(r, g);
+              if (cache.cache_hit && a.force !== true) {
+                items.push({
+                  goal: g, ok: true, status: "cached", source: cache.source, cached: true,
+                  file: cache.file, source_hash: cache.source_hash, content_hash: cache.content_hash,
+                });
+                continue;
+              }
+              const spawned = await startSummarizerChild(r, g, { parent: ex?.agent, signal: ex?.signal }, { actor });
+              if (spawned.error) {
+                const fb = refreshGoalResults(r, g, { actor, fallbackReason: `llm-unavailable: ${spawned.error}` });
+                items.push({
+                  goal: g, ok: fb.written, status: fb.written ? "written" : "failed", fallback: true,
+                  source: fb.source, fallback_reason: fb.fallback_reason, child_error: spawned.error,
+                  file: fb.file, archive: fb.archive, reason: fb.reason,
+                });
+                continue;
+              }
+              items.push({
+                goal: g, ok: true, status: "pending", source: "llm", child_id: spawned.childId,
+                model_route: spawned.model_route ?? null, file: goalResultsSummaryFile(findGoalFile(r, g)),
+              });
+            } catch (e) {
+              items.push({ goal: g, ok: false, status: "failed", reason: String(e?.message ?? e) });
+            }
+          }
+          const n = (s) => items.filter((i) => i.status === s).length;
+          return {
+            ok: n("failed") === 0, total: items.length, llm: true,
+            written: n("written"), pending: n("pending"), cached: n("cached"),
+            skipped: n("skipped"), failed: n("failed"),
+            items,
+          };
+          })();
+        }
+        // content：调用方（专用摘要子代理 / 人工）产出的正文；批量时同一份 content 用于所有目标无意义，
+        // 故 content 只允许与单目标 goal 同用（批量必须逐目标各自调用，避免把同一正文写到多个目标）。
+        const content = typeof a.content === "string" && a.content.trim() ? a.content : null;
+        const source = typeof a.source === "string" && a.source.trim() ? a.source.trim() : null;
+        if (content && targets.length > 1) {
+          throw new GraphError("graph_refresh_results：content 只能与单目标 goal 同用（批量摘要请逐目标分别调用，避免同一正文覆盖多个目标）");
+        }
+        // 逐目标独立：任一目标失败/跳过都不影响其余目标（批量可审计）。
+        const items = targets.map((g) => {
+          try {
+            const res = refreshGoalResults(r, g, { actor, content, source });
+            // 外部正文（专用摘要子代理的 LLM 正文 / 人工手写）已落盘 ⇒ 标记，免得该 child 结束时降级覆盖。
+            if (res.written && content) markSummarizerLanded(g);
+            const reason = String(res.reason ?? "");
+            const status = res.written
+              ? "written"
+              : (/^(error|tx-|write-failed)/.test(reason) ? "failed" : "skipped");
+            return {
+              goal: g, ok: res.written, status, source: res.source,
+              file: res.file, archive: res.archive, reason: res.reason,
+              bytes: res.bytes, truncated: res.truncated, source_hash: res.source_hash,
+              generated_at: res.generated_at, sources: res.sources,
+            };
+          } catch (e) {
+            return { goal: g, ok: false, status: "failed", file: "", reason: String(e?.message ?? e) };
+          }
+        });
+        const count = (s) => items.filter((i) => i.status === s).length;
+        return {
+          ok: count("failed") === 0, total: items.length,
+          written: count("written"), skipped: count("skipped"), failed: count("failed"),
+          items,
+        };
       },
     },
     {
@@ -2481,6 +2885,80 @@ export function apply(ctx, config) {
           json(res, 200, detail);
         } catch (e) {
           json(res, 404, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-374 F2/F3：重写 results.md（旧版归档）。
+    // 两种来源，共用同一个 core 写入器（路径/归档/空态策略唯一真源），无需用户去命令行或会话下指令：
+    //  ① `llm: true`（推荐，负责人反馈：重新摘要是用户主动触发的，可以用 LLM）⇒ 派发**专用摘要子代理**
+    //     （role=summarizer，流程对齐产品经理润色 goal）去读目标详情并调用写入工具落盘（source=llm）；
+    //     本端点立即返回 `{ok, child_id, pending:true}`，不阻塞、不等待子代理；
+    //  ② 省略 `llm` ⇒ 零 LLM 确定性兜底正文同步写盘（子代理不可用/失败时前端自动回退到这条）。
+    {
+      path: "/api/dsh-graph/refresh-results",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, content, source } = body;
+          if (!goal || typeof goal !== "string") return json(res, 400, { error: "missing goal" });
+          // 工具面已拒绝 llm+content（content 已是成品正文）；REST 侧同样判 400，避免静默丢弃 content。
+          if (body.llm === true && typeof content === "string" && content.trim()) {
+            return json(res, 400, { error: "llm 与 content 不能同时使用（content 已是成品正文，不需要再调 LLM）" });
+          }
+          const rRoot = rootForReq(req, body);
+          if (body.llm === true) {
+            const goalFile = findGoalFile(rRoot, goal);
+            if (basename(goalFile) !== "goal.md") {
+              return json(res, 400, { error: `暂存目标（backlog）没有目标目录，无法生成完成摘要：${goal}` });
+            }
+            // 成本/防抖（F5 第 5 条）：历史未变且现有摘要已是 LLM 版 ⇒ 直接命中缓存，**不再调用 LLM**。
+            const cache = goalResultsCacheState(rRoot, goal);
+            if (cache.cache_hit && body.force !== true) {
+              return json(res, 200, {
+                ok: true, pending: false, cached: true, goal, source: cache.source,
+                file: cache.file, source_hash: cache.source_hash, content_hash: cache.content_hash,
+              });
+            }
+            const { parent, error: parentError } = resolveSpawnParent(rRoot);
+            const ac = new AbortController();
+            req.on("close", () => ac.abort());
+            const spawned = parentError
+              ? { childId: null, error: parentError }
+              : await startSummarizerChild(rRoot, goal, { parent, signal: ac.signal }, {
+                workspace: workspaceOf(req, body) ?? dirname(rRoot),
+                actor: "human:gui",
+              });
+            if (spawned.error) {
+              // 失败降级（F5 第 4 条）：不抛错、不空手而归 ⇒ 立刻写 deterministic 并把原因写进机器头。
+              const fb = refreshGoalResults(rRoot, goal, {
+                actor: "human:gui",
+                fallbackReason: `llm-unavailable: ${spawned.error}`,
+              });
+              return json(res, 200, {
+                ok: fb.written, pending: false, fallback: true, goal, source: fb.source,
+                fallback_reason: fb.fallback_reason, child_error: spawned.error,
+                file: fb.file, archive: fb.archive, reason: fb.reason, ...fb,
+              });
+            }
+            return json(res, 200, {
+              ok: true, pending: true, goal, child_id: spawned.childId,
+              model_route: spawned.model_route ?? null,
+              digest_bytes: Buffer.byteLength(spawned.digest ?? "", "utf8"),
+            });
+          }
+          const result = refreshGoalResults(rRoot, goal, {
+            actor: "human:gui",
+            content: typeof content === "string" ? content : null,
+            source: typeof source === "string" ? source : null,
+          });
+          // 外部正文落盘 ⇒ 标记该目标待结束的 summarizer 项，避免其 child 结束时降级覆盖（复核 BLOCK-1）。
+          if (result.written && typeof content === "string" && content.trim()) markSummarizerLanded(goal);
+          // written=false 不是 HTTP 错误（空态/已跳过都是可预期的业务结果），由前端按 reason 显示。
+          json(res, 200, { ok: result.written, pending: false, ...result });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -3717,6 +4195,16 @@ export function apply(ctx, config) {
         execute: (args, exec) => t.run(args, exec),
       }),
     );
+
+    // g-374 F1：注册完成摘要截获（宿主生命周期事件；O(1) 回调，非轮询 / 非 fs watcher）。
+    // 特性探测：宿主无 ctx.on（不支持该事件面的旧宿主）⇒ **不注册、静默降级**（不写文件、不抛错、
+    // 不影响 attempt 生命周期与既有功能）。engines 下界维持 >=0.1.5-rc.2，**不得抬高**。
+    if (typeof ctx?.on === "function") {
+      try {
+        const off = ctx.on("subagent/end", captureAttemptResults);
+        if (typeof off === "function") disposers.push(off);
+      } catch { /* 事件名不被宿主支持 ⇒ 静默（特性探测） */ }
+    }
 
     // g-118：supervisor 守则自动注入（不依赖显式 skill 调用）——
     // g-118（负责人 2026-08-22 设计转向）：在所有会话注入**简短引导提示词**（非完整守则）。

@@ -51,6 +51,13 @@ import {
   rowBtnStyle,
   popoverAnchor,
 } from "../../dsh-graph-host/lib/client/narrow-width.js";
+// g-367：搜索命中「按版本/分区聚合」纯函数（组序/分桶）——渲染级断言与纯函数断言共用同一实现
+import {
+  SEARCH_GROUP_HIDDEN,
+  versionLaneKey,
+  searchGroupOrder,
+  groupSearchMatches,
+} from "../../dsh-graph-host/lib/client/search-groups.js";
 import {
   init,
   createGoal,
@@ -2084,7 +2091,7 @@ test("g-352 att-005：会话内看板页签签名 == 冻结 fixture，且 fixtur
       assert.fail("拒绝覆盖冻结基线：需 G352_SIG_ACK=1 显式确认（或 G352_SIG_DUMP=<其他路径> 只导出做 diff）");
     }
     const head = [
-      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.16.1 重新冻结：仅 constants 的 PLUGIN_VERSION 0.16.0→0.16.1 变更，渲染契约逐字未变 ⇒ content-sha 未变；上一轮为 g-366 窄档搜索改走单列聚合泳道）",
+      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.17.0 开发线重新冻结：g-367 给窄档搜索聚合泳道加分区组头，250px 非搜索页签的渲染契约逐字未变 ⇒ content-sha 未变，仅 source-sha256 头随 kanban.js 变更；本次为 PLUGIN_VERSION 0.17.0-alpha→0.17.0 版本串刷新，正文与 content-sha256 同样逐字节未变）",
       `# source-commit: ${execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot(), encoding: "utf8" }).trim()}`,
       `# source-sha256: ${sourceFingerprint()}`,
       `# source-files: ${SIG_SOURCE_FILES.join(",")}   # 源 hash 覆盖的模块（决定头部/泳道渲染）`,
@@ -2389,12 +2396,16 @@ test("g-366 判据1/2（渲染级）：460px + 搜索 ⇒ 只渲染一条单列�
   for (const sk of ["describe", "collect", "execute", "confirm", "deliver", "blocked"]) {
     assert.equal(els.filter((e) => e.props?.key === sk).length, 0, `不渲染横向阶段列头 ${sk}`);
   }
-  // 命中卡数 == 工具条计数 N，且顺序与 searchMatches 一致
+  // 命中卡数 == 工具条计数 N，且顺序 == g-367 的**分区组序**（g-366 的「扁平序 == searchMatches 序」
+  // 已被 g-367 取代：分组只改纵向落点，命中集合与 i/N 次序不变，见下方 g-367 判据 6）。
   assert.equal(g366Counter(r.root()), `1/${G366_MATCH_ORDER.length}`, "工具条计数 == 命中总数");
   const laneCards = g366Subtree(r.root(), "search-lane-cards").filter((e) => typeof e.props?.id === "string" && e.props.id.startsWith("goal-"));
   assert.equal(laneCards.length, G366_MATCH_ORDER.length, `聚合泳道内命中卡数 == N（实得 ${laneCards.length}）`);
-  assert.deepEqual(laneCards.map((e) => e.props.id), G366_MATCH_ORDER.map((id) => "goal-" + id),
-    "聚合泳道顺序 == searchMatches 顺序（i/N 次序与纵向视觉次序一致）");
+  assert.deepEqual(laneCards.map((e) => e.props.id),
+    ["goal-g-101", "goal-g-201", "goal-g-001", "goal-g-900", "goal-g-401", "goal-g-301"],
+    "聚合泳道纵向顺序 == 分区组序（活跃版本 → 已发布版本 → 独立目标 → backlog → 已隐藏版本）");
+  assert.deepEqual([...laneCards.map((e) => e.props.id)].sort(), [...G366_MATCH_ORDER.map((id) => "goal-" + id)].sort(),
+    "命中集合与 searchMatches 逐项一致（分组只改落点，不增不减）");
   // 跨分区：两个活跃版本 + 已发布版本 + **已隐藏版本** + 独立目标 + backlog 全部在场（g-233 不回退）
   for (const id of G366_MATCH_ORDER) {
     assert.equal(els.filter((e) => e.props?.id === "goal-" + id).length, 1, `命中 ${id} 必须在聚合泳道内渲染一次`);
@@ -2600,4 +2611,270 @@ test("g-366 源码契约/i18n：单列闸门是纯派生、搜索不再挂起收
   const enVal = enBlock.match(/'search\.laneLabel':\s*'([^']*)'/)![1];
   assert.doesNotMatch(enVal, /[\u3400-\u9fff]/, "en 文案零 CJK");
   assert.match(enVal, /\{count\}/, "en 词条保留 {count} 占位");
+});
+
+// ============================================================================
+// g-367（feature，负责人 2026-09-26 裁决「建侧边模式下搜索态版本分组」）：
+//   g-366 交付的单列「搜索结果」聚合泳道是**跨分区扁平列表**（实测 14 条命中混在一条泳道里）；
+//   本目标在窄档聚合泳道内按**版本/分区**分段呈现：每段组头 + 计数，组内仍单列纵向。
+//   组序 == 看板既有分区顺序（活跃版本 → 已发布版本 → 独立目标 → backlog），已隐藏版本的命中
+//   单列「已隐藏版本」组置于**末尾**（g-233：命中不得被视图过滤藏掉）。
+//   执行者按目标约束收敛的两条待确认口径（负责人可否决）：
+//     ① 组头**不可折叠**（折叠态记忆需要新持久化键，本目标明确「零新增持久化键」）；
+//     ② i/N 跳转保持**全局次序**（== searchMatches 次序，与宽档同源）——分组只改纵向落点。
+// ============================================================================
+
+const G367_SIDE = G366_SIDE;
+/** 驱动一次真实搜索（复用 g-366 的既有驱动件：输入 → Enter → 稳定后的渲染结果）。 */
+const g367Search = g366Search;
+const G367_HIDDEN_KEY = G366_HIDDEN_KEY;
+/** g-367 分组板：各分区命中数互不相同（1/2/1/1/1/1/2）⇒ 组头计数可被逐项断言；
+ *  vempty 只有非命中 ⇒ 证明「空组不渲染」；v0/vold 两个已发布版本 ⇒ 证明已发布组也按板序。 */
+const g367Board = () => ({
+  lazy: false, backlog_loaded: true, backlog_count: 2, generated_at: "2026-09-26T00:00:00Z",
+  supervisorSession: null,
+  versions: [
+    { slug: "v1", name: "V1", status: "active", goals: [
+      { id: "g-101", title: "alpha 版本一", status: "draft", tags: [], criteria_count: 0, cards_count: 0 },
+      { id: "g-102", title: "beta 版本一", status: "draft", tags: [], criteria_count: 0, cards_count: 0 }], goals_count: 2, lazy: false, loaded: true },
+    { slug: "v2", name: "V2", status: "active", goals: [
+      { id: "g-201", title: "alpha 版本二", status: "in_progress", tags: [], criteria_count: 0, cards_count: 0 },
+      { id: "g-203", title: "alpha 版本二之二", status: "draft", tags: [], criteria_count: 0, cards_count: 0 },
+      { id: "g-202", title: "beta 版本二", status: "draft", tags: [], criteria_count: 0, cards_count: 0 }], goals_count: 3, lazy: false, loaded: true },
+    { slug: "v0", name: "V0", status: "released", goals: [
+      { id: "g-001", title: "alpha 已发布", status: "delivered", tags: [], criteria_count: 0, cards_count: 0 },
+      { id: "g-002", title: "beta 已发布", status: "delivered", tags: [], criteria_count: 0, cards_count: 0 }], goals_count: 2, lazy: false, loaded: true },
+    { slug: "vhid", name: "VHID", status: "active", goals: [
+      { id: "g-301", title: "alpha 隐藏版本", status: "draft", tags: [], criteria_count: 0, cards_count: 0 },
+      { id: "g-302", title: "alpha 隐藏版本二", status: "draft", tags: [], criteria_count: 0, cards_count: 0 }], goals_count: 2, lazy: false, loaded: true },
+    { slug: "vold", name: "VOLD", status: "released", goals: [
+      { id: "g-011", title: "alpha 已发布旧版", status: "delivered", tags: [], criteria_count: 0, cards_count: 0 }], goals_count: 1, lazy: false, loaded: true },
+    { slug: "vempty", name: "VEMPTY", status: "active", goals: [
+      { id: "g-501", title: "beta 空组版本", status: "draft", tags: [], criteria_count: 0, cards_count: 0 }], goals_count: 1, lazy: false, loaded: true },
+  ],
+  standalone: [
+    { id: "g-900", title: "alpha 独立目标", status: "draft", tags: [], criteria_count: 0, cards_count: 0 },
+    { id: "g-901", title: "beta 独立目标", status: "draft", tags: [], criteria_count: 0, cards_count: 0 }],
+  backlog: [
+    { id: "g-401", title: "alpha backlog", status: "draft", tags: [], criteria_count: 0, cards_count: 0 },
+    { id: "g-402", title: "beta backlog", status: "draft", tags: [], criteria_count: 0, cards_count: 0 }],
+});
+/** searchMatches 的既有全局次序：b.versions(v1→v2→v0→vhid→vold) → standalone → backlog。
+ *  与下面的分组纵向次序**故意不同**（vold 提前、vhid 命中落到末尾）⇒ i/N 口径可被证伪。 */
+const G367_MATCH_ORDER = ["g-101", "g-201", "g-203", "g-001", "g-301", "g-302", "g-011", "g-900", "g-401"];
+/** 分组后的纵向次序：活跃版本 → 已发布版本 → 独立目标 → backlog → 已隐藏版本。 */
+const G367_GROUPED_ORDER = ["g-101", "g-201", "g-203", "g-001", "g-011", "g-900", "g-401", "g-301", "g-302"];
+const G367_GROUPS = ["v-v1", "v-v2", "rellane-v0", "rellane-vold", "standalone", "backlog", SEARCH_GROUP_HIDDEN];
+const G367_LABELS = ["V1（1）", "V2（2）", "V0（1）", "VOLD（1）", "独立目标（1）", "backlog（1）", "已隐藏版本（2）"];
+const G367_MISS_IDS = ["g-102", "g-202", "g-002", "g-501", "g-901", "g-402"];
+/** 隐藏版本底账：只藏 vhid（其两条命中仍必须出现在末尾「已隐藏版本」组里）。 */
+const g367Storage = () => ({ [G367_HIDDEN_KEY]: JSON.stringify(["vhid"]) });
+
+/** 聚合泳道内的分组投影（顺序 = 渲染顺序；cardIds 顺序 = 组内纵向顺序）。 */
+const g367Groups = (root: any) => {
+  const node = treeOf(root).find((e) => e.props?.key === "search-lane-cards");
+  const out: { key: string; label: string; cardIds: string[] }[] = [];
+  for (const el of treeOf(node)) {
+    const k = el.props?.key;
+    if (typeof k === "string" && k.startsWith("search-group-")) {
+      out.push({ key: k.slice("search-group-".length), label: treeText(el), cardIds: [] });
+    } else if (out.length > 0 && typeof el.props?.id === "string" && el.props.id.startsWith("goal-")) {
+      out[out.length - 1].cardIds.push(el.props.id);
+    }
+  }
+  return out;
+};
+/** 组头元素数（含未投影进 g367Groups 的异常情形）。 */
+const g367GroupHeaders = (root: any) => treeOf(root)
+  .filter((e) => typeof e.props?.key === "string" && e.props.key.startsWith("search-group-"));
+/** 点一次「下一个」跳转（每次重新取按钮：闭包捕获的是当轮 searchCurrentIndex）。 */
+async function g367Next(h: ReturnType<typeof createRenderHarness>, props: any) {
+  const r = await h.settle(props);
+  const next = r.passElements().filter((e) => e.type === "button" && e.props?.title === "↓").pop();
+  assert.ok(next, "存在「下一个」跳转按钮");
+  next.props.onClick({ stopPropagation() {} });
+  return h.settle(props);
+}
+/** 当前命中卡 id（唯一）。 */
+const g367Current = (root: any) => treeOf(root)
+  .filter((e) => elClass(e).includes("dg-card-search-current")).map((e) => e.props.id);
+
+test("g-367 判据1/2（渲染级）：460px + 搜索 ⇒ 聚合泳道内按分区分段（组头 + 计数），组序 == 看板分区顺序、空组不渲染", async () => {
+  const h = createRenderHarness({ boardWidth: 460, payload: { board: g367Board(), backlogGoals: [] }, storage: g367Storage() });
+  const r = await g367Search(h, G367_SIDE, "alpha");
+  const els = r.passElements();
+  // 仍是 g-366 的单列聚合泳道：分组不改档位、不新增第二条泳道
+  assert.equal(gridTemplates(els)[0], "minmax(0, 1fr)", "分组后仍是单列档（不回横向网格）");
+  assert.equal(els.filter((e) => e.props?.key === "search-lane-label").length, 1, "仍只有一条搜索聚合泳道");
+  assert.equal(withClass(els, "dg-lane-collapse").length, 0, "组头不可折叠（无折叠开关）");
+  // 组序 / 组头文案（zh 词典）/ 组内次序
+  const groups = g367Groups(r.root());
+  assert.deepEqual(groups.map((g) => g.key), G367_GROUPS,
+    "组序 == 活跃版本（板序）→ 已发布版本（板序）→ 独立目标 → backlog → 已隐藏版本");
+  assert.deepEqual(groups.map((g) => g.label), G367_LABELS, "组头 = 分区名 + 计数（如「V2（2）」）");
+  assert.deepEqual(groups.map((g) => g.cardIds), [
+    ["goal-g-101"], ["goal-g-201", "goal-g-203"], ["goal-g-001"], ["goal-g-011"],
+    ["goal-g-900"], ["goal-g-401"], ["goal-g-301", "goal-g-302"],
+  ], "组内仍是单列纵向、组间按分区顺序");
+  assert.deepEqual(groups.flatMap((g) => g.cardIds), G367_GROUPED_ORDER.map((id) => "goal-" + id),
+    "泳道整体纵向次序 == 分组次序");
+  // 空组不渲染：vempty 只有非命中 ⇒ 零组头、零空组元素
+  assert.equal(els.filter((e) => e.props?.key === "search-group-v-vempty").length, 0, "零命中分区不渲染组头");
+  assert.equal(g367GroupHeaders(r.root()).length, G367_GROUPS.length, "组头数 == 非空分区数");
+  // 计数口径：各组计数之和 == 工具条 N == 命中卡数；命中一张不少、非命中一张不多
+  assert.equal(g366Counter(r.root()), `1/${G367_MATCH_ORDER.length}`, "i/N 计数仍是命中总数");
+  assert.equal(groups.reduce((n, g) => n + g.cardIds.length, 0), G367_MATCH_ORDER.length, "各组计数之和 == N");
+  for (const id of G367_MATCH_ORDER) assert.equal(els.filter((e) => e.props?.id === "goal-" + id).length, 1, `命中 ${id} 恰好渲染一次`);
+  for (const id of G367_MISS_IDS) assert.equal(els.filter((e) => e.props?.id === "goal-" + id).length, 0, `非命中 ${id} 不渲染`);
+  // 窄容器内横向不撑破：组头与泳道本体都 minWidth:0（长版本名走省略号）
+  const laneBody = treeOf(r.root()).find((e) => e.props?.key === "search-lane-cards");
+  assert.equal(laneBody?.props?.style?.minWidth, 0, "聚合泳道本体 minWidth:0");
+  const headerEl = treeOf(r.root()).find((e) => e.props?.key === "search-group-v-v1");
+  assert.equal(headerEl?.props?.style?.minWidth, 0, "组头 minWidth:0（长版本名不撑破）");
+  assert.equal(headerEl?.props?.style?.overflow, "hidden", "组头 overflow:hidden");
+  assert.equal(headerEl?.props?.className, "dg-search-group-label", "组头有稳定 class（DOM/断言钩子）");
+});
+
+test("g-367 判据3/6（渲染级）：已隐藏版本命中单列末尾组（g-233），i/N 保持全局次序且跨组可定位", async () => {
+  const h = createRenderHarness({ boardWidth: 460, payload: { board: g367Board(), backlogGoals: [] }, storage: g367Storage() });
+  // ① 搜索前：隐藏版本的目标确实不在渲染树里（视图把它过滤了）——证明「不被藏」是聚合泳道带来的
+  const before = (await h.settle(G367_SIDE)).passElements();
+  assert.equal(before.filter((e) => e.props?.id === "goal-g-301").length, 0, "搜索前隐藏版本目标不渲染（正常）");
+  assert.equal(before.filter((e) => e.props?.id === "goal-g-302").length, 0, "搜索前隐藏版本目标不渲染（正常）");
+  // ② 搜索后：两条隐藏版本命中都在末尾「已隐藏版本」组里（g-233 不回退）
+  let r = await g367Search(h, G367_SIDE, "alpha");
+  const groups = g367Groups(r.root());
+  assert.equal(groups[groups.length - 1].key, SEARCH_GROUP_HIDDEN, "已隐藏版本组恒在末尾");
+  assert.equal(groups[groups.length - 1].label, "已隐藏版本（2）", "组头明示归属（命中不被视图藏掉）");
+  assert.deepEqual(groups[groups.length - 1].cardIds, ["goal-g-301", "goal-g-302"], "隐藏版本命中全在该组");
+  // ③ i/N 全体次序 == searchMatches 全局次序（第 5 步就跳进末尾的隐藏组 ⇒ 跨组自动定位）
+  const seen: string[] = [g367Current(r.root())[0]];
+  for (let i = 1; i < G367_MATCH_ORDER.length; i++) {
+    r = await g367Next(h, G367_SIDE);
+    const cur = g367Current(r.root());
+    assert.equal(cur.length, 1, `第 ${i + 1} 步恰好一张当前命中`);
+    assert.equal(g366Counter(r.root()), `${i + 1}/${G367_MATCH_ORDER.length}`, `第 ${i + 1} 步计数为 ${i + 1}/N`);
+    const laneIds = g366Subtree(r.root(), "search-lane-cards")
+      .filter((e) => typeof e.props?.id === "string" && e.props.id.startsWith("goal-")).map((e) => e.props.id);
+    assert.ok(laneIds.includes(cur[0]), `第 ${i + 1} 步跳转目标 ${cur[0]} 就在聚合泳道内（锚点在 DOM ⇒ 可滚到可见）`);
+    assert.deepEqual(g367Groups(r.root()).map((g) => g.key), G367_GROUPS, `第 ${i + 1} 步分组结构稳定（不因临时 unhide 改派）`);
+    seen.push(cur[0]);
+  }
+  assert.deepEqual(seen, G367_MATCH_ORDER.map((id) => "goal-" + id), "i/N 全体次序 == searchMatches 全局次序（不按组重排）");
+  assert.notDeepEqual(seen, G367_GROUPED_ORDER.map((id) => "goal-" + id), "全局次序 != 分组纵向次序（两条口径确实分离）");
+  // ④ 跳进隐藏版本命中后，该命中仍在末尾「已隐藏版本」组（分组位置不抖动）
+  const last = g367Groups(r.root())[G367_GROUPS.length - 1];
+  assert.deepEqual(last.cardIds, ["goal-g-301", "goal-g-302"], "跳转前后隐藏组位置与成员不变");
+});
+
+test("g-367 判据4（渲染级）：宽档（≥480px）搜索零分组痕迹（组头与聚合泳道都只在窄档出现）", async () => {
+  const h = createRenderHarness({ boardWidth: 900, payload: { board: g367Board(), backlogGoals: [] }, storage: g367Storage() });
+  const r = await g367Search(h, G367_SIDE, "alpha");
+  const els = r.passElements();
+  assert.equal(g367GroupHeaders(r.root()).length, 0, "宽档零组头");
+  assert.equal(els.filter((e) => e.props?.key === "search-lane-label").length, 0, "宽档不渲染聚合泳道（g-366 判据 4 不变）");
+  assert.ok(String(gridTemplates(els)[0]).startsWith("130px"), "宽档仍是既有横向多泳道网格");
+  assert.ok(withClass(els, "dg-card-matched").length > 0, "宽档仍保留既有「命中」黄色边框（非命中卡也在场）");
+});
+
+test("g-367 纯函数（search-groups.js）：组序/空组过滤/隐藏归属/兜底组，且命中一张不丢", () => {
+  const board = g367Board();
+  // 泳道 key 唯一真源（kanban.js 的搜索候选与分组共用）
+  assert.equal(versionLaneKey({ slug: "v1", status: "active" }), "v-v1", "活跃版本 ⇒ v-<slug>");
+  assert.equal(versionLaneKey({ slug: "v0", status: "released" }), "rellane-v0", "已发布版本 ⇒ rellane-<slug>");
+  assert.equal(versionLaneKey(null), "v-", "空入参不抛错");
+  // 组序（纯派生，不依赖命中）：顺序表**含零命中分区**（vempty），由分桶阶段过滤 ⇒ 空组不渲染
+  const order = searchGroupOrder(board.versions, ["vhid"]);
+  assert.deepEqual(order.map((g) => g.key),
+    ["v-v1", "v-v2", "v-vempty", "rellane-v0", "rellane-vold", "standalone", "backlog", SEARCH_GROUP_HIDDEN],
+    "组序表 == 活跃版本（板序）→ 已发布版本（板序）→ 独立目标 → backlog → 末尾隐藏组");
+  assert.deepEqual(order.map((g) => g.name), ["V1", "V2", "VEMPTY", "V0", "VOLD", null, null, null], "版本组带版本名，其余走 i18n 词条");
+  assert.ok(!G367_GROUPS.includes("v-vempty"), "夹具前提：vempty 是零命中分区（只出现在顺序表里）");
+  assert.equal(order[order.length - 1].hidden, true, "末尾组标记为 hidden");
+  assert.equal(order.filter((g) => g.hidden).length, 1, "隐藏版本**只**聚成一组");
+  // 命中构造口径与 executeSearch 一致（版本 → standalone → backlog）
+  const matches: any[] = [];
+  for (const v of board.versions) for (const g of v.goals) if (String(g.title).includes("alpha")) {
+    matches.push({ id: g.id, versionSlug: v.slug, isReleased: v.status === "released", laneKey: versionLaneKey(v) });
+  }
+  for (const g of board.standalone) if (String(g.title).includes("alpha")) matches.push({ id: g.id, versionSlug: null, isReleased: false, laneKey: "standalone" });
+  for (const g of board.backlog) if (String(g.title).includes("alpha")) matches.push({ id: g.id, versionSlug: null, isReleased: false, laneKey: "backlog" });
+  assert.deepEqual(matches.map((m) => m.id), G367_MATCH_ORDER, "夹具命中次序 == 既有 searchMatches 全局次序");
+  const groups = groupSearchMatches(board.versions, matches, ["vhid"]);
+  assert.deepEqual(groups.map((g) => g.key), G367_GROUPS, "分桶后的组序与组序表一致（空组被过滤）");
+  assert.deepEqual(groups.map((g) => g.items.map((m) => m.id)), [
+    ["g-101"], ["g-201", "g-203"], ["g-001"], ["g-011"], ["g-900"], ["g-401"], ["g-301", "g-302"],
+  ], "组内保持 searchMatches 相对次序");
+  assert.equal(groups.reduce((n, g) => n + g.items.length, 0), matches.length, "命中一张不丢（g-233）");
+  assert.deepEqual(matches.map((m) => m.id), G367_MATCH_ORDER, "纯函数不修改入参次序");
+  // 兜底：版本已从 payload 消失（laneKey 不在顺序表内）⇒ 末尾兜底组，命中仍渲染
+  const stale = groupSearchMatches(board.versions, [{ id: "g-777", versionSlug: "vgone", laneKey: "v-vgone" }], []);
+  assert.equal(stale.length, 1, "兜底组恒存在");
+  assert.deepEqual(stale[0].items.map((m) => m.id), ["g-777"], "不在板上的命中绝不丢（g-233）");
+  // 零命中 ⇒ 零组（N=0 时不渲染空泳道，既有空态接管）
+  assert.deepEqual(groupSearchMatches(board.versions, [], []), [], "零命中零组");
+});
+
+test("g-367 源码契约/i18n：分组纯派生、零新增状态真源与持久化键、组头无折叠、词条 zh/en 双写", () => {
+  const kanban = readClient("kanban");
+  // 分组调用与组头渲染都长在既有聚合泳道里（不复制第二条泳道/第二套卡片路径）
+  assert.match(kanban, /const searchGroups = groupSearchMatches\(b\.versions, searchMatches, hiddenVersionSlugs\);/);
+  assert.match(kanban, /dgT\("search\.groupLabel", \{ name: searchGroupLabel\(grp\), count: grp\.items\.length \}\)/);
+  assert.equal([...kanban.matchAll(/return Card\(\{/g)].length, 3, "Card 渲染调用点仍为既有三处");
+  // 泳道 key 约定唯一真源：搜索候选改走 versionLaneKey，全文件只剩 released 泳道那一处字面量
+  assert.match(kanban, /laneKey: versionLaneKey\(v\),/);
+  assert.equal([...kanban.matchAll(/"rellane-"/g)].length, 1, "rellane- 字面量只剩已发布泳道那一处");
+  // 零新增状态真源 / 持久化键
+  assert.doesNotMatch(kanban, /useState\([^)]*[Gg]roup/);
+  assert.doesNotMatch(kanban, /localStorage\.(getItem|setItem)\([^)]*[Gg]roup/);
+  // 组头是纯展示行：没有折叠开关（也就没有折叠态需要持久化）
+  const groupBlock = kanban.slice(kanban.indexOf("const groupEls = [];"), kanban.indexOf("}, ...groupEls)];"));
+  assert.ok(groupBlock.length > 0, "组头渲染块存在");
+  assert.doesNotMatch(groupBlock, /onClick/, "组头无点击行为（不可折叠）");
+  assert.doesNotMatch(groupBlock, /dg-lane-collapse|collapsedLanes/, "组头不复用泳道折叠语义");
+  // i18n：zh/en 双写、占位符齐全、en 零 CJK、零硬编码中文
+  const i18n = readClient("i18n");
+  const zhBlock = i18n.slice(i18n.indexOf("const zh = {"), i18n.indexOf("const en = {"));
+  const enBlock = i18n.slice(i18n.indexOf("const en = {"));
+  const zhGroup = zhBlock.match(/'search\.groupLabel':\s*'([^']*)'/)![1];
+  const enGroup = enBlock.match(/'search\.groupLabel':\s*'([^']*)'/)![1];
+  assert.match(zhGroup, /\{name\}/, "zh 组头保留 {name} 占位");
+  assert.match(zhGroup, /\{count\}/, "zh 组头保留 {count} 占位");
+  assert.match(enGroup, /\{name\}/, "en 组头保留 {name} 占位");
+  assert.match(enGroup, /\{count\}/, "en 组头保留 {count} 占位");
+  assert.doesNotMatch(enGroup, /[\u3400-\u9fff]/, "en 组头零 CJK");
+  const enHidden = enBlock.match(/'search\.hiddenGroupLabel':\s*'([^']*)'/)![1];
+  assert.doesNotMatch(enHidden, /[\u3400-\u9fff]/, "en 隐藏组词条零 CJK");
+  assert.equal([...zhBlock.matchAll(/'search\.groupLabel':/g)].length, 1, "zh 组头词条唯一");
+  assert.equal([...enBlock.matchAll(/'search\.groupLabel':/g)].length, 1, "en 组头词条唯一");
+  assert.doesNotMatch(kanban, /["']已隐藏版本["']/, "零硬编码中文（走 dgT 词条）");
+});
+
+test("g-367 负向对照（判据8）：把分组逻辑短路回 g-366 扁平列表必须红", async () => {
+  const bundlePath = join(import.meta.dirname, "../../dist/lib/client.js");
+  const real = readFileSync(bundlePath, "utf8");
+  const anchor = "const searchGroups = groupSearchMatches(b.versions, searchMatches, hiddenVersionSlugs);";
+  assert.ok(real.includes(anchor), "变异锚点必须存在于构建产物（源码契约）");
+  // 旧行为等价变异：分组短路为「单组 = 全部命中」⇒ 回到 g-366 的跨分区扁平列表
+  const mutated = real.replace(anchor, 'const searchGroups = [{ key: "__flat__", name: "", hidden: false, items: searchMatches }];');
+  assert.notEqual(mutated, real, "变异必须真正改写产物");
+  const run = async (bundle: string) => {
+    const h = createRenderHarness({ boardWidth: 460, payload: { board: g367Board(), backlogGoals: [] }, storage: g367Storage(), bundle });
+    const r = await g367Search(h, G367_SIDE, "alpha");
+    return {
+      groupKeys: g367Groups(r.root()).map((g) => g.key),
+      headers: g367GroupHeaders(r.root()).length,
+      cardCount: g366Subtree(r.root(), "search-lane-cards")
+        .filter((e) => typeof e.props?.id === "string" && e.props.id.startsWith("goal-")).length,
+    };
+  };
+  const good = await run(real);
+  assert.deepEqual(good.groupKeys, G367_GROUPS, "真产物：7 个分区组按板序渲染");
+  assert.equal(good.headers, G367_GROUPS.length, "真产物：组头数 == 非空分区数");
+  assert.equal(good.cardCount, G367_MATCH_ORDER.length, "真产物：命中一张不缺");
+  const bad = await run(mutated);
+  assert.equal(bad.cardCount, G367_MATCH_ORDER.length, "旧行为下命中同样一张不缺（差异只在分组呈现）");
+  assert.deepEqual(bad.groupKeys, ["__flat__"], "旧行为确实回到单组跨分区扁平列表（报障形态复现）");
+  assert.notDeepEqual(bad.groupKeys, G367_GROUPS, "扁平列表下分组断言必然不成立（红）");
+  assert.equal(bad.headers, 1, "旧行为下没有分区组头 ⇒ 组头断言必然不成立（红）");
 });

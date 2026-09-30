@@ -15,9 +15,21 @@
  * `resolveCanonicalRoot` 包装 `resolveRoot`，在 config.root 为相对路径时检测 workspace
  * 是否处于 Git linked worktree，若是则归一到主工作树的 canonical graph root。
  * 显式绝对 config.root 不做 Git 发现（管理员覆盖）；Git 发现失败时安全回退到普通 resolveRoot。
+ *
+ * g-363 修正（只加 **scratch 边界**；判定基准**有意保持旧语义**——主管裁决 (a)）：
+ * 1) 「是否 linked worktree」仍是 `realpath(workspace) !== realpath(mainWorktree)`：仓库内
+ *    **被跟踪**的子目录（`core/`、`docs/` 等）照旧归一到该项目所属主工作树的看板，g-149 语义逐字不变。
+ * 2) 工作树内**被 git 忽略**的子目录（`git check-ignore`，索引感知）**且不是工作树根自身**，
+ *    不算该仓库的项目内容，一律当作 **独立项目根**（`isScratchWorkspace`）：不做 canonicalization、
+ *    不归属外层仓库的代码工作树、干净度探测不可判。
+ *    这一条就消除了旧实现的三个污染出口（实测）：仓库内 `tmp/` 下的测试夹具写生产
+ *    project.yaml/事件流、隔离实例 workspace（`tmp/dsh-test/<版本>/workspace`）写生产 memory.jsonl、
+ *    linked worktree 内跑全量 47 条假红。理由：仓库内 `tmp/`（`.gitignore` 的 `/tmp/`）是 AGENTS.md
+ *    指定的临时/隔离区，它必须是一个可写的**独立看板**，而不是真实看板的别名
+ *    （与 mem-73f84ba7 的相容方式见 docs/dev-instance-guide.md）。
  */
-import { resolve, isAbsolute } from "node:path";
-import { execSync } from "node:child_process";
+import { resolve, relative, isAbsolute, sep } from "node:path";
+import { execSync, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
 
 /** Default TTL for canonical root / git worktree cache: 30 seconds. */
@@ -29,7 +41,7 @@ interface CacheEntry<T> {
   gitMtimeMs: number | null;
 }
 
-const worktreeInfoCache = new Map<string, CacheEntry<GitWorktreeInfo | null>>();
+const worktreeInfoCache = new Map<string, CacheEntry<GitWorktreeProbe | null>>();
 const canonicalRootCache = new Map<string, CacheEntry<CanonicalRootResult>>();
 
 /**
@@ -86,8 +98,29 @@ export interface GitWorktreeInfo {
   mainWorktree: string;
   /** Absolute path to the current workspace (the one that was inspected). */
   workspace: string;
-  /** Whether the workspace is a linked worktree (vs. the main worktree itself). */
+  /**
+   * Absolute path to the worktree **root** containing `workspace`
+   * (`git rev-parse --show-toplevel`). Equals `mainWorktree` for the main worktree
+   * and for any of its subdirectories.
+   */
+  worktreeRoot: string;
+  /**
+   * Whether `workspace` belongs to a Git **linked worktree** (a real `git worktree add`
+   * tree) or to any subdirectory of one.
+   *
+   * g-363（主管裁决 (a)）：判据**有意保持旧语义** `workspace !== mainWorktree` ——
+   * 仓库内**被跟踪**的子目录因此仍归一到该项目主工作树的看板（g-149 逐字不变）。
+   * 仓库内**被 git 忽略**的子目录不再走这里：它们是 scratch，`discoverGitWorktree`
+   * 直接返回 null（见 {@link isScratchWorkspace}），污染出口由 scratch 边界消除。
+   */
   isLinkedWorktree: boolean;
+}
+
+/** Internal discovery result: worktree metadata + the g-363 scratch verdict. */
+interface GitWorktreeProbe {
+  info: GitWorktreeInfo;
+  /** workspace 是工作树内被 git 忽略的子目录（且不是工作树根自身）。 */
+  isScratch: boolean;
 }
 
 /** Options for discoverGitWorktree / resolveCanonicalRoot. */
@@ -96,22 +129,79 @@ export interface CanonicalRootOptions {
   ttlMs?: number;
 }
 
-/** Custom runner for git exec commands (overridable in tests/mocking). */
+/** Custom runner for git exec commands (overridable in tests/mocking).
+ *  g-363：带路径参数的命令一律走 `execFileSync` 的**参数数组**签名 —— 不经 shell，
+ *  Windows 上不会出现「单引号不被 cmd.exe 剥离」而把引号当路径字符的问题。 */
 export const _gitRunner = {
   execSync: (cmd: string, options: any) => execSync(cmd, options),
+  execFileSync: (file: string, args: string[], options: any) => execFileSync(file, args, options),
 };
 
+/** Safe realpath: falls back to the lexical path when the target does not exist. */
+function safeRealpath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
 /**
- * Discover Git worktree metadata for a workspace directory.
- * Uses `git worktree list --porcelain` whose first entry is always the main worktree.
+ * g-363: 生成 `git check-ignore` 的**参数数组**（纯函数，便于平台无关的字符级守卫）。
+ *
+ * - 路径一律用 `/` 分隔：`relative()` 在 Windows 上产出 `\`，匹配不上 `.gitignore` 里按 `/`
+ *   写的规则，故用 `sep` 归一（仅在 Windows 上做转换，避免把 POSIX 文件名里的 `\` 误当分隔符）。
+ * - 带尾斜杠：调用方只传**目录**，而「目录专用」忽略规则（如 `.gitignore` 里的 `tmpdata/`）
+ *   对尚不存在的路径不匹配 —— 带尾斜杠让 `tmp/…` 这类规则在目录尚未创建时也能命中。
+ * - 参数里**不得出现引号字符**：调用方用数组签名（不经 shell）传参，引号只会变成路径的一部分。
+ *
+ * @returns 参数数组；路径越界（工作树外）时返回 null。
+ */
+export function checkIgnoreArgv(worktreeRoot: string, target: string): string[] | null {
+  const rel = relative(worktreeRoot, target);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;
+  const relPosix = sep === "\\" ? rel.split(sep).join("/") : rel;
+  return ["check-ignore", "-q", "--", `${relPosix}/`];
+}
+
+/**
+ * g-363: 判断 `target` 是否是 `worktreeRoot` 内**被 git 忽略**的路径。
+ *
+ * 语义：git-ignored 的内容不属于该仓库的项目内容（scratch/本地数据）。判定走
+ * `git check-ignore`（默认索引感知：已跟踪的路径即使匹配 ignore 规则也报告「未忽略」），
+ * 故「已跟踪的子目录」仍视作项目内容。
+ * 命令用 `_gitRunner.execFileSync` 的数组签名（不经 shell）—— 见 {@link checkIgnoreArgv}。
+ * 任何失败（git 不可用、路径越界）都返回 false —— 保守地按「非 scratch」处理，
+ * 避免把正常项目误判成独立项目。
+ */
+function isIgnoredInsideWorktree(worktreeRoot: string, target: string): boolean {
+  const argv = checkIgnoreArgv(worktreeRoot, target);
+  if (!argv) return false;
+  try {
+    _gitRunner.execFileSync("git", argv, {
+      cwd: worktreeRoot,
+      timeout: 5000,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return true; // exit 0 == ignored
+  } catch {
+    return false; // exit 1 == not ignored, or git unavailable
+  }
+}
+
+/**
+ * Probe Git worktree metadata for a workspace directory.
+ * Uses `git worktree list --porcelain` whose first entry is always the main worktree,
+ * plus `git rev-parse --show-toplevel` for the containing worktree root (g-363), plus
+ * `git check-ignore` for the scratch verdict (only for non-root subdirectories).
  * Results are cached in memory per workspace with TTL and .git mtime validation.
  * Returns null if the workspace is not inside a Git repo, git is unavailable,
- * or the command fails for any reason (safe fallback).
+ * or any command fails (safe fallback).
  */
-export function discoverGitWorktree(
+function probeGitWorktree(
   workspaceRoot: string,
   options?: CanonicalRootOptions,
-): GitWorktreeInfo | null {
+): GitWorktreeProbe | null {
   const workspaceKey = resolve(workspaceRoot);
   const ttlMs = options?.ttlMs ?? DEFAULT_CANONICAL_CACHE_TTL_MS;
 
@@ -122,7 +212,7 @@ export function discoverGitWorktree(
     }
   }
 
-  let info: GitWorktreeInfo | null = null;
+  let probe: GitWorktreeProbe | null = null;
   const gitMtimeMs = getGitMtime(workspaceKey);
 
   try {
@@ -140,6 +230,16 @@ export function discoverGitWorktree(
       stdio: ["pipe", "pipe", "pipe"],
     });
 
+    // g-363: containing worktree root. `--show-toplevel` fails outside a work tree /
+    // for bare repos; the outer catch then yields null (workspace-local fallback),
+    // i.e. we never canonicalize when the worktree root is unknown.
+    const rawTop = _gitRunner.execSync("git rev-parse --show-toplevel", {
+      cwd: workspaceKey,
+      timeout: 5000,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
     // Parse the first worktree entry (always the main worktree)
     const output = typeof rawOutput === "string" ? rawOutput : String(rawOutput);
     const lines = output.split("\n");
@@ -151,36 +251,70 @@ export function discoverGitWorktree(
       }
     }
     if (mainPath) {
-      let resolvedWorkspace: string;
-      let resolvedMain: string;
-      try {
-        resolvedWorkspace = realpathSync(workspaceKey);
-        resolvedMain = realpathSync(resolve(mainPath));
-      } catch {
-        resolvedWorkspace = workspaceKey;
-        resolvedMain = resolve(mainPath);
-      }
-      const isLinked = resolvedWorkspace !== resolvedMain;
+      const resolvedWorkspace = safeRealpath(workspaceKey);
+      const resolvedMain = safeRealpath(resolve(mainPath));
+      const topRaw = (typeof rawTop === "string" ? rawTop : String(rawTop)).trim();
+      const worktreeRoot = topRaw ? safeRealpath(resolve(workspaceKey, topRaw)) : resolvedMain;
+      // g-363: scratch = worktree 内被 git 忽略的子目录（不是工作树根自身）。
+      // 工作树根即使匹配 ignore 规则（例如 `.worktrees/` 被忽略的 linked worktree 根）
+      // 仍然是项目根：g-149 的 canonicalization 必须保留。
+      const isScratch =
+        worktreeRoot !== resolvedWorkspace && isIgnoredInsideWorktree(worktreeRoot, resolvedWorkspace);
 
-      info = {
-        mainWorktree: resolvedMain,
-        workspace: resolvedWorkspace,
-        isLinkedWorktree: isLinked,
+      probe = {
+        info: {
+          mainWorktree: resolvedMain,
+          workspace: resolvedWorkspace,
+          worktreeRoot,
+          // 裁决 (a)：判据保持旧语义（workspace 自身 vs 主工作树）。仓库内**被跟踪**子目录
+          // 照旧归一；污染出口只由上面的 scratch 边界消除。
+          isLinkedWorktree: resolvedWorkspace !== resolvedMain,
+        },
+        isScratch,
       };
     }
   } catch {
-    info = null; // not a git repo, git command failed, or git unavailable
+    probe = null; // not a git repo, git command failed, or git unavailable
   }
 
   if (ttlMs > 0) {
     worktreeInfoCache.set(workspaceKey, {
-      value: info,
+      value: probe,
       timestamp: Date.now(),
       gitMtimeMs,
     });
   }
 
-  return info;
+  return probe;
+}
+
+/**
+ * Discover Git worktree metadata for a workspace directory.
+ *
+ * Returns null when the workspace is **not a project of any git worktree** — either because it is
+ * outside a Git repo / git is unavailable, or because it is a **git-ignored scratch subdirectory**
+ * of a worktree (g-363: test fixtures under the repository's `tmp/`, isolated dev instance
+ * workspace at `tmp/dsh-test/<version>/workspace`). Callers must resolve such a workspace locally:
+ * it is its own project root and must never be attributed to the enclosing repository
+ * (see {@link isScratchWorkspace} for the explicit verdict).
+ */
+export function discoverGitWorktree(
+  workspaceRoot: string,
+  options?: CanonicalRootOptions,
+): GitWorktreeInfo | null {
+  const probe = probeGitWorktree(workspaceRoot, options);
+  return probe && !probe.isScratch ? probe.info : null;
+}
+
+/**
+ * g-363: whether `workspaceRoot` is a **git-ignored subdirectory** of the worktree containing it
+ * (and not the worktree root itself). Such a directory is scratch/local data, not part of the
+ * repository's project content: it gets its own graph root, is not attributed to the enclosing
+ * repo's code worktree, and its git cleanliness cannot be judged.
+ * Returns false for non-repo paths and on any discovery failure.
+ */
+export function isScratchWorkspace(workspaceRoot: string): boolean {
+  return probeGitWorktree(resolve(workspaceRoot))?.isScratch === true;
 }
 
 /** Result metadata from `resolveCanonicalRoot`. */
@@ -194,9 +328,11 @@ export interface CanonicalRootResult {
   /**
    * Resolution mode:
    * - "absolute-config": explicit absolute config.root, no Git discovery
-   * - "main-tree": workspace is the main worktree (or non-Git), normal resolution
-   * - "canonicalized": workspace was a linked worktree, resolved to main worktree
-   * - "workspace-fallback": Git discovery failed, fell back to workspace-local resolution
+   * - "main-tree": workspace is inside the main worktree, normal resolution
+   * - "canonicalized": workspace is inside a Git linked worktree, resolved to main worktree
+   * - "workspace-fallback": no worktree project owns the workspace — outside a Git repo, Git
+   *   discovery failed, or (g-363) the workspace is a git-ignored scratch subdirectory —
+   *   fell back to workspace-local resolution
    */
   mode: "absolute-config" | "main-tree" | "canonicalized" | "workspace-fallback";
   /** Warning message when legacy worktree-local graph data is detected. */
@@ -208,9 +344,12 @@ export interface CanonicalRootResult {
  *
  * Wraps `resolveRoot` with Git linked-worktree detection:
  * - Explicit absolute `config.root`: returns as-is, no Git discovery.
- * - Relative config.root (default `.dsh-graph`): if workspace is a Git linked worktree,
- *   canonicalizes to `<main-worktree>/<config.root>`. If discovery fails, falls back to
- *   normal `resolveRoot` with mode "workspace-fallback".
+ * - Relative config.root (default `.dsh-graph`): if workspace is **inside a Git linked worktree**
+ *   (judged by its containing worktree root, g-363), canonicalizes to `<main-worktree>/<config.root>`.
+ *   If discovery fails, falls back to normal `resolveRoot` with mode "workspace-fallback".
+ * - g-363: a git-ignored subdirectory of a worktree (scratch: test fixture / isolated instance
+ *   workspace under the repo's `tmp/`) is its own project root → workspace-local resolution with
+ *   mode "workspace-fallback". This is what keeps fixtures and isolated instances off the real board.
  * - Detects legacy worktree-local `.dsh-graph` directories and attaches warnings.
  * - Caches results in memory per (workspace, config.root) key to eliminate per-request
  *   synchronous git subprocess calls.
@@ -248,13 +387,17 @@ export function resolveCanonicalRoot(
 
   const localRoot = rejectSymlinkRoot(resolve(workspace, relRoot));
 
-  // Attempt Git discovery
+  // Attempt Git discovery. g-363: `discoverGitWorktree` also yields null for a git-ignored
+  // scratch subdirectory (test fixture / isolated instance workspace), so those resolve
+  // workspace-local instead of being canonicalized onto the real board. The explicit verdict is
+  // available via `isScratchWorkspace(workspace)`.
   const gitInfo = discoverGitWorktree(workspace, { ttlMs });
 
   let result: CanonicalRootResult;
 
   if (!gitInfo) {
-    // Not a Git repo or git unavailable — workspace-local fallback
+    // No worktree project owns this workspace (non-repo, git unavailable, or g-363 scratch) —
+    // workspace-local fallback
     result = {
       root: localRoot,
       workspace,
@@ -262,7 +405,7 @@ export function resolveCanonicalRoot(
       mode: "workspace-fallback",
     };
   } else if (!gitInfo.isLinkedWorktree) {
-    // If workspace IS the main worktree, normal resolution
+    // Workspace is inside the main worktree — normal resolution
     result = {
       root: localRoot,
       workspace,
@@ -270,7 +413,7 @@ export function resolveCanonicalRoot(
       mode: "main-tree",
     };
   } else {
-    // Linked worktree — canonicalize to main worktree
+    // Workspace is inside a linked worktree — canonicalize to main worktree
     const canonicalRoot = rejectSymlinkRoot(resolve(gitInfo.mainWorktree, relRoot));
     let rootWarning: string | undefined;
 

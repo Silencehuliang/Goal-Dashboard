@@ -247,6 +247,23 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 - **会话已长/杂/带失败史时宁开新**：上下文膨胀与误导内容的成本高于重建上下文的成本；
 - 决定复用 → 必须走 fork+compact；判断不确定时新开，宁可损失缓存，不可损失干净。
 
+### 共享卡挂载 vs 长期记忆
+
+两者都是「复用既有成果」，但机制与边界不同，**不可互相替代**：
+
+- **长期记忆**（`graph_memory_add` 等）：任何 agent 都可自行 recall 的持久事实/经验，
+  写进记忆区、按需检索，不构成目标组装的一部分；
+- **上下文卡片**：目标组装的一部分——显式挂载（`graph_attach_shared_card`）、可审计
+  （`card.shared_referenced` 事件）、可解除（`graph_detach_shared_card`）；执行 attempt 启动时
+  按 `context_cards` 注入子代理上下文。用 `graph_list_shared_cards` 只读列出共享池
+  （`id/title/status/refs`）挑选可复用的卡；
+- **何时用哪个**：需要「谁都知道」的长期事实 → 记忆；需要把此前收集好的资料作为
+  新目标/并行目标的输入 → 挂载共享卡。**不要**为省事把卡片全文抄进记忆。
+
+**授权边界**：挂载/解除引用与解绑同口径——目标创建者、`human:*`（负责人 GUI）、
+匹配 `project.yaml` `supervisor.session` 的 `supervisor:<sessionId>` 放行；执行子代理
+（`agent:<child>`）一律拒绝且零副作用。**不引入隐式自动继承**：复用必须是显式工具调用。
+
 ## 执行规范
 
 - **自报状态（每轮开始立即 + 关键阶段更新）**：supervisor 自己也要用
@@ -357,7 +374,11 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 `graph_amend_goal` 修订记录｜ `graph_add_card / graph_fill_card / graph_review_card`
 信息收集卡（仅当目标确有收集需求时使用）｜ `graph_bind_collect_card` 收集子代理绑卡（parent_session_id 反查会话头）｜
 `graph_start_attempt` 派发执行 attempt（`card` 参数仅用于信息收集派发）｜ `graph_report_status`
-状态汇报｜ `graph_validate` 全量校验｜ `graph_rebuild` 事件流对账
+状态汇报｜ `graph_validate` 全量校验｜ `graph_rebuild` 事件流对账｜
+`graph_write_results` 人工写某次 attempt 的完成摘要（`source=manual` + 写入者标注）｜
+`graph_refresh_results` 重写 `results.md`（零 LLM 兜底拼装 / 或采用 `content`：专用摘要子代理按目标详情写「改动 / 影响 / 值得注意」，source=llm；旧版归档；单目标或批量 `goals[]`，content 仅限单目标）
+——**主管自做 chore/patch 等无子代理改动、或 attempt 没截获到输出时必须自己补写结果**，不留结果真空
+（派发执行的输出由插件自动截获到 `results-att-<attempt>.md`，无需手工）
 
 ## 换会话
 
