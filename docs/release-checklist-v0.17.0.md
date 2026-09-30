@@ -213,8 +213,12 @@ node scripts/platform-smoke-test.mjs --static-only .     # → tmp/release-0170/
 | T1 静态门禁（转发） | **PASS** | 发布包无 POSIX 专有常量的 ESM 具名导入 |
 
 > **边界（不得外推）**：本节只覆盖**离线静态段**（`--static-only`，使用已构建 `dist/`）。
-> **未执行**需要 `npx` 联网的完整段 T2（tarball 安装）/ T3（核心运行时）/ T4（实例启动）/ T5（REST 冒烟）
-> —— 见 §8 未做项。本节结论**只对 Linux 成立**，与 Windows 红线（§3.1）无关、不可替代。
+> **历史注记（准备阶段原纪录，保留）**：**未执行**需要 `npx` 联网的完整段 T2（tarball 安装）/ T3（核心运行时）/ T4（实例启动）/ T5（REST 冒烟）
+> —— 见 §8 未做项。
+> **更新（2026-09-30，发布收尾）**：Linux 完整段 T2–T5 **已执行** —— Linux 完整段 T2–T5 已由独立验证者对**最终包**实跑：
+> probes P1–P6/M4 = 9/0/0、转发 T1–T5 = 10/0/0、宿主 `npx -y @deepseek-ai/dsh@0.2.0-rc.2`、端口 3095、
+> 被测包 sha256 `b5b3e0a40321d692fdeee78d339db0355bc669a5c7347b49b0185bcc2cc5498d`、零看板污染（2026-09-30）。
+> 本节结论**只对 Linux 成立**，与 Windows 红线（§3.1）无关、不可替代。
 
 ## 7. 生产看板污染守卫（g-363 修复后回归自查）
 
@@ -238,7 +242,8 @@ node scripts/platform-smoke-test.mjs --static-only .     # → tmp/release-0170/
    通过 10 / 失败 0 / 告警 0 ⇒ 发布红线 1 **已满足**。**唯一残留**：门禁跑的是已验包 `4e11d772…`，
    最终包 `b5b3e0a4…` 只差 `package/README.md` 文字，负责人**明示免复跑**（见第 6 条）。
 2. **macOS 原生门禁未执行**：README 平台状态表三处均写「未验证 / Not verified」（macOS 从未跑过真机门禁）。
-3. **完整门禁 T2–T5 未由本 attempt 自跑**（§6）：本 attempt 只跑**离线静态段**；Windows 侧完整 T1–T5
+3. **完整门禁 T2–T5 未由本 attempt 自跑**（§6，历史注记——已于 2026-09-30 由独立验证者补做，见第 10 条）：
+   本 attempt 只跑**离线静态段**；Windows 侧完整 T1–T5
    结论的出处是**负责人真机执行**（§3.1）。宿主 `0.2.0-rc.2` 另经 g-372 隔离实例 A/B 门验。
 4. **未做发布后核验**（全新隔离 profile 安装 → 工具 / 看板 / skill 注册）：属发布后动作。
 5. **第二台机器已复算 tarball sha256**（本版该项已关闭）：负责人在 Windows 侧 `certutil -hashfile … SHA256`
@@ -251,6 +256,11 @@ node scripts/platform-smoke-test.mjs --static-only .     # → tmp/release-0170/
 8. **P1 / P3 的平台限制（非缺陷，只报告）**：本机 ext4 大小写敏感；在大小写不敏感卷上，
    仅大小写不同的 goal id / version slug 会互相别名，脚本按设计给 WARN 并附影响说明。
 9. **M4 只覆盖发布路径**：`scripts/archived/` 内仍有 41 处 Linux-only 假设（归档脚本，非发布路径，只列 INFO）。
+
+10. **（已关闭，2026-09-30 发布收尾）Linux 完整段 T2–T5 已由独立验证者对最终包实跑：probes P1–P6/M4 = 9/0/0、
+    转发 T1–T5 = 10/0/0、宿主 `npx -y @deepseek-ai/dsh@0.2.0-rc.2`、端口 3095、被测包 sha256
+    `b5b3e0a40321d692fdeee78d339db0355bc669a5c7347b49b0185bcc2cc5498d`、零看板污染（2026-09-30）** —— 第 3 条所述
+    「本 attempt 未自跑完整段」的历史限制由此在**发布收尾阶段**闭环（原纪录保留于第 3 条）。
 
 ## 9. 发布操作（**人工 gate，本阶段未执行**）
 
