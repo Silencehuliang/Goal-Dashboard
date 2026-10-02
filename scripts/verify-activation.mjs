@@ -13,7 +13,10 @@ if (!base || !token || !pkg) {
 
 let cookie = '';
 async function req(path, opts = {}) {
-  const url = path.startsWith('http') ? path : `${base}${path}`;
+  // Accept absolute URLs, root-absolute paths, and document-relative ones
+  // (0.2.0-rc.2 advertises "plugins/??…" with no leading slash and HTML-escaped "&amp;").
+  const clean = String(path).replace(/&amp;/g, '&');
+  const url = clean.startsWith('http') ? clean : `${base}${clean.startsWith('/') ? '' : '/'}${clean}`;
   const res = await fetch(url, {
     redirect: 'manual',
     headers: { ...(cookie ? { cookie } : {}), ...(opts.headers ?? {}) },
@@ -93,11 +96,12 @@ for (const c of candidates) {
   const r = await req(c);
   console.log(`GET ${c.slice(0, 160)} -> ${r.status} ${r.type} bytes=${r.buf.length}`);
   if (r.status === 200 && /javascript/.test(r.type ?? '')) {
-    writeFileSync(`${outDir}/http-client-${pkg}.js`, r.buf);
+    // This is the multi-package batch/server combo URL, NOT the single-package row bundle:
+    // never overwrite the authoritative http-client-<pkg>.js written from the row URL.
+    writeFileSync(`${outDir}/http-combo-${pkg}.js`, r.buf);
     const body = r.buf.toString('utf8');
-    const idm = /__ModuleLoader__\.load\(\{\s*id:\s*"([^"]+)"/.exec(body);
-    console.log(`  bundle loader id = ${idm ? idm[1] : '(not found)'} (expected ${pkg})`);
-    break;
+    const ids = [...body.matchAll(/__ModuleLoader__\.load\(\{\s*id:\s*"([^"]+)"/g)].map((m) => m[1]);
+    console.log(`  combo batch contains ${ids.length} loader ids, first=${ids[0]}, includes ${pkg}=${ids.includes(pkg)} (saved as http-combo-${pkg}.js)`);
   }
 }
 

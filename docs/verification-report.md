@@ -10,21 +10,22 @@
 
 ## 0. Headline
 
-| # | What | Verdict |
-|---|---|---|
-| V1 | Root `package.json` is an installable plugin manifest | **FAIL** (1 of 12 sub-checks: `engines.dsh` excludes the desktop host version) |
-| V2 | `dist/` artifacts (committed, fresh, parseable, banner, bundle id) | **FAIL** (1 of 10: `dist/` is not committed) |
-| V3 | Plugin becomes an enabled loader row + served client bundle on a real host | **PASS** (on DSH 0.1.5-rc.3; not proven on 0.2.0-rc.2) |
-| V4 | Host half registers the expected tools | **PASS** (54 tools, live host, self-reported) |
-| V5 | Skills core: tests + catalog vs real `SKILL.md` files | **PASS** (18/18 tests; 37/37 entries byte-exact) |
-| V6 | Adversarial | **PASS with one FAIL-observation** (a) PASS (b) PASS (c) FAIL — test suite pollutes the working tree; one sub-check UNVERIFIED |
-| V7 | No regression vs baseline | **FAIL** — 105 failures vs 104 on pristine HEAD; **exactly 1 new failure**, precisely attributed |
+| # | What | First pass (working tree @ `7dffb03` + edits) | Final pass (**commit `7e8e016`**) |
+|---|---|---|---|
+| V1 | Root `package.json` is an installable plugin manifest | FAIL (1/12 — `engines.dsh` excluded `0.2.0-rc.2`) | **PASS (12/12)** |
+| V2 | `dist/` artifacts (committed, fresh, parseable, banner, bundle id) | FAIL (1/10 — `dist/` untracked) | **PASS (10/10)** |
+| V3 | Enabled loader row + served client bundle on a real host | PASS on DSH 0.1.5-rc.3 only | **PASS on 0.1.5-rc.3 AND on 0.2.0-rc.2** |
+| V4 | Host half registers the expected tools | PASS (54 tools, live host) | **PASS (54 tools on both hosts)** |
+| V5 | Skills core: tests + catalog vs real `SKILL.md` files | PASS (18/18; 37/37 byte-exact) | **PASS (unchanged)** |
+| V6 | Adversarial | PASS + 1 FAIL-observation (test-suite pollution) + 1 UNVERIFIED (symlink `EPERM`) | **unchanged** (both items are environment-bound) |
+| V7 | No regression vs baseline | FAIL — 105 vs 104, 1 new failure attributed | **PASS — 0 new, 1 fixed** |
 
-Three things must not be softened:
+Four things must not be softened:
 
-1. **Pristine `v0.17.0` is not green on this machine**: 1514 tests, **104 pre-existing failures** (mostly Windows/EPERM/path issues). "The tests pass" is *not* a valid acceptance statement here. The bar used below is *baseline vs after*, per the Lead's instruction.
-2. **`engines.dsh` does not accept `0.2.0-rc.2`** under standard semver prerelease semantics — the desktop host's exact version.
-3. **`dsh plugin add` silently mis-parses any specifier containing a space** into multiple bogus registry packages. Verified by attribution: plain `pnpm add` with the same quoted specifier behaves correctly.
+1. **Pristine `v0.17.0` is not green on this machine**: 1514 tests, **104 pre-existing failures** (mostly Windows/EPERM/path issues). "The tests pass" is *not* a valid acceptance statement here. The bar used below is *baseline vs after*, per the Lead's instruction — and at `7e8e016` the suite is **103 failures (108 including nested subtests) vs 104/108 baseline: one test better, none worse**.
+2. **`engines.dsh` did not accept `0.2.0-rc.2`** under standard semver prerelease semantics — the desktop host's exact version. This was a real bug in the first pass; it is **fixed at `7e8e016`** and the new range is re-verified with a full truth table in §12.2.
+3. **`dsh plugin add` silently mis-parses any specifier containing a space** into multiple bogus registry packages (including one fetched from the public registry). Verified by attribution: plain `pnpm add` with the same quoted specifier behaves correctly. **Still present (it is a `dsh` defect, not ours)**; install docs must keep warning about space-containing paths.
+4. **Roughly eight of the remaining Windows failures are line-ending artefacts of the guards themselves, not product defects** — proven by re-evaluating the exact patterns against the same sources with EOL normalised (§12.3). A stale-but-green guard would be worse than a red one; these are red-for-the-wrong-reason guards, and the Lead already fixed one of them (g-352 att-005) in `7e8e016`.
 
 ---
 
@@ -417,6 +418,8 @@ So: **the test suite pollutes the repo working tree** (also leaving `tmp/g331-pr
 
 ## 8. V7 — regression vs baseline (FAIL: 1 new failure)
 
+> **First pass, kept as history.** Superseded by §12.3: at commit `7e8e016` the same comparison yields **0 new failures and 1 fixed**. The one new failure found here (`client.test.ts:348`, g-174) was fixed by the `surfaces` teammate before the push.
+
 `node --test --test-reporter=tap core/tests/*.test.ts`, TAP summary lines verbatim:
 
 | Run | When | tests | pass | fail | cancelled | duration |
@@ -453,7 +456,7 @@ Baseline context for honesty: the 104 baseline failures are dominated by Windows
 
 ## 9. Limitations of this verification
 
-1. **Version gap — the most important limitation.** The desktop host is `@deepseek-ai/dsh 0.2.0-rc.2` (read by this verifier out of `app.asar`: root `package.json` = `@deepseek-ai/dsh-desktop 0.2.0-rc.2`, `dsh/node_modules/@deepseek-ai/dsh/package.json` = `0.2.0-rc.2`). Every **runtime** verification (loading, activation, tool registration, boot graph, HTTP serving, REST payloads) was executed on the **global CLI `0.1.5-rc.3`** with an isolated `DSH_HOME`, because the rule was to leave the user's live 0.2.0-rc.2 GUI untouched. Therefore: exact 0.2.0-rc.2 runtime behaviour is proven **only** for the APIs actually read from 0.2.0-rc.2 code (the client-modules guard), and is **not** proven for activation/serving. A 0.2.0-rc.2 run of the same `scripts/verify-activation.mjs` against a throwaway instance remains the outstanding verification.
+1. **Version gap — CLOSED at `7e8e016`.** The desktop host is `@deepseek-ai/dsh 0.2.0-rc.2` (read by this verifier out of `app.asar`: root `package.json` = `@deepseek-ai/dsh-desktop 0.2.0-rc.2`, `dsh/node_modules/@deepseek-ai/dsh/package.json` = `0.2.0-rc.2`). The first pass could only runtime-verify on the global CLI `0.1.5-rc.3`. The final pass also ran a **real isolated 0.2.0-rc.2 host** (`pnpm add @deepseek-ai/dsh@0.2.0-rc.2`, throwaway `DSH_HOME` under `./tmp/verify-rc2`, port 3083) and re-ran V3/V4 there end-to-end (§12.4). Both host versions report the same result; what remains unproven is only the Electron **shell** around it (the desktop app's own window boot), not the DSH runtime behaviour.
 2. **`engines.dsh` consumption is unproven.** This report establishes the semver semantics of the declared range; it does not establish whether any marketplace/precheck enforces it, nor whether it uses `includePrerelease`.
 3. **No browser.** The client half was verified as *served, composed, correctly identified, revision-pinned* — not as *rendered*. No DOM/slot assertion was made; the workflow strip's actual render path is untested here.
 4. **No LLM-driven path.** Tool invocation by a model, and hence the `graph_workflow_*` tool execution through a real agent turn, was not exercised (the isolated instance has no credentials). Tool **registration** is proven; tool **execution through the host** is not. The core functions themselves were exercised directly (V6).
@@ -464,13 +467,15 @@ Baseline context for honesty: the 104 baseline failures are dominated by Windows
 
 ---
 
-## 10. What to fix, in order
+## 10. What to fix, in order — **status at `7e8e016`**
 
-1. **Commit `dist/`** (V2.1). Without it the git-install route installs a package whose client export does not exist — a hard `ClientPackageCompositionError`, not a degraded board.
-2. **`engines.dsh`** (V1.12): `>=0.1.5-rc.2 <0.2.1-0` excludes `0.2.0-rc.2` under default semver. If the desktop host version must be accepted, widen to include prereleases (e.g. `>=0.1.5-rc.2 <0.2.1` plus an explicit prerelease-aware comparator, or document that consumers must pass `includePrerelease`).
-3. **`core/tests/client.test.ts:348`** (V7): update the hard-coded `github.com/miuzel/dsh-graph` expectation to the fork URL — the only new regression.
-4. **Note the `dsh plugin add` space bug** (V1.13) in install docs: any path containing a space silently installs unrelated registry packages. `dsh plugin add github:owner/repo` is unaffected (pnpm's clone dir is space-free), but any local-path instruction from a spaced directory is unsafe.
-5. Optional: state plainly in the README that the test suite leaves `./.dsh-graph` and `tmp/*` residue (V6c), and that `v0.17.0` upstream is not green on Windows (104 baseline failures).
+1. ~~**Commit `dist/`** (V2.1)~~ — **DONE**: `git ls-files dist` = 39 at `7e8e016`.
+2. ~~**`engines.dsh`** (V1.12)~~ — **DONE**: now `>=0.1.5-rc.2 <0.2.1-0 || >=0.2.0-rc.1 <0.2.1-0` in the root manifest, the host manifest, `dist/package.json` and the READMEs; re-verified with a truth table (§12.2). *Residual nuance:* `0.2.0-rc.0` is still excluded (it is below `>=0.2.0-rc.1`); that is intended-looking, but worth a one-line note in the README rationale if the range is meant to mean "all 0.2.0 prereleases".
+3. ~~**`core/tests/client.test.ts:348`** (V7)~~ — **DONE**: the g-174 regression is gone; the full suite shows 0 new failures (§12.3).
+4. **Still open — `dsh plugin add` space bug** (V1.13): any path containing a space silently installs unrelated registry packages. `dsh plugin add github:owner/repo` is unaffected (pnpm's clone dir is space-free), but any local-path instruction issued from a spaced directory is unsafe. Keep the warning in the install docs.
+5. **Still open (new) — Windows CRLF makes several guards red-for-the-wrong-reason** (§12.3): ~8 guards compare CRLF sources against the LF-built `dist/lib/client.js` or use `\n` multi-line patterns, so they can never pass on a built Windows tree even when the product is correct. The same class of bug the Lead fixed for g-352 att-005 also affects `client.test.ts:1911` (g-181), `client.test.ts:3659` (g-244) and five `g352-narrow-width` 判据 guards. A shared EOL-normalising read helper in the test suite would turn ~8 permanently-red guards into real signal.
+6. **Still open (new) — fresh-clone EOL of `dist/`** (§12.1): with `core.autocrlf=true`, a fresh `git clone` materialises `dist/lib/client.js` as CRLF (924 151 bytes) although the committed blob is LF (908 176 bytes). JavaScript tolerates that, and it actually *helps* the CRLF-sensitive guards, but it means "byte-identical to the committed artifact" is only true inside one checkout form.
+7. Optional: state plainly in the README that the test suite leaves `./.dsh-graph` and `tmp/*` residue (V6c), and that `v0.17.0` upstream is not green on Windows (104 baseline failures).
 
 ---
 
@@ -488,7 +493,209 @@ node --test tmp/verify/adversarial.test.ts            # V6a/V6c adversarial (ver
 node --test --test-reporter=tap core/tests/*.test.ts  # V7 (compare against tmp/verify/baseline-head.tap)
 node scripts/verify-tap.mjs tmp/verify/baseline-head.tap --names
 node tmp/verify/compare-served.mjs                    # served bundle == dist/lib/client.js
+node scripts/verify-classify.mjs tmp/verify/baseline-head.tap tmp/verify/final-7e8e016.tap   # V7 delta
+node scripts/verify-crlf.mjs tmp/verify/final-7e8e016.tap   # are regex failures CRLF artefacts?
+node tmp/verify/eol-cases.mjs                        # the two non-regex CRLF cases
+node tmp/verify/verify-g352-refreeze.mjs             # g-352 fixture re-freeze: not laundered
 # V3 needs a live isolated instance; see §4 for the exact command sequence.
+# 0.2.0-rc.2 route (§12.4): pnpm add @deepseek-ai/dsh@0.2.0-rc.2 into ./tmp/verify-rc2/runtime,
+#   DSH_HOME=./tmp/verify-rc2/home, `dsh plugin --profile web add link:<space-free copy>`,
+#   `dsh web --no-open --port 3083`, then scripts/verify-activation.mjs against it.
 ```
 
-Evidence files: `tmp/verify/` — `baseline-head.tap`, `after-change.tap`, `skills-workflow.tap`, `adversarial.tap`, `dump-config.txt`, `boot-graph.json`, `http-root.html`, `http-client-goal-dashboard.js`, `http-workflow.json`, `marker.json`, `activation-run.log`, `web2.log`, `plugin-add*.log`, `asar/`, `pinned-head.txt`.
+Evidence files: `tmp/verify/` — `baseline-head.tap`, `after-change.tap`, `final-7e8e016.tap`, `skills-workflow.tap`, `adversarial.tap`, `dump-config.txt`, `boot-graph.json`, `http-root.html`, `http-client-goal-dashboard.js`, `http-workflow.json`, `marker.json`, `activation-run.log`, `web2.log`, `plugin-add*.log`, `asar/`, `pinned-head.txt`; and `tmp/verify-rc2/` for the 0.2.0-rc.2 instance (`activation-rc2c.log`, `boot-graph.json`, `http-client-goal-dashboard.js`, `http-combo-goal-dashboard.js`, `marker.json`, `web-rc2*.log`, `runtime-install*.log`).
+
+---
+
+## 12. Final verification pass — commit `7e8e016`
+
+Everything below was produced **after** the Lead pushed, against the pushed commit, with a clean working tree (`git status --porcelain` → 0 lines). This section supersedes the first-pass verdicts in §2/§3/§8 for V1/V2/V7 and closes the 0.2.0-rc.2 runtime gap from §9.1.
+
+### 12.1 Revision pin (final)
+
+```
+git rev-parse HEAD   = 7e8e0163b315329cfa9525d06936bfa66ec4e09b   (feat: Goal-Dashboard — DSH desktop-compatible fork…)
+git status --porcelain = <empty>
+git ls-files dist | wc -l = 39
+package.json sha256            ac472614c27997fb   bytes=1947
+dist/index.js sha256           d1c6e780af65d54a…  working tree 234514 B (CRLF) / blob 230020 B (LF)
+dist/lib/client.js sha256      60d80fbd605b7e47…  working tree 908176 B (LF)  / blob 908176 B (LF)  ← byte-identical
+dist/package.json sha256       d27ee2b8dc969116…
+```
+
+**What was actually verified about "committed `dist/`" (the `core.autocrlf=true` question), measured, not assumed:**
+
+| path | blob bytes / CRLF | `git cat-file --filters` (= fresh checkout) | working tree now |
+|---|---|---|---|
+| `dist/lib/client.js` | 908176 / **0** | 924151 / 15975 | 908176 / **0** |
+| `dist/index.js` | 230020 / 0 | 234514 / 4494 | 234514 / 4494 |
+| `core/tests/fixtures/g352-conv-signature.txt` | 10167 / 0 | 10228 / 61 | 10167 / 0 |
+| `package.json` | 1947 / 0 | 2026 / 79 | 1947 / 0 |
+| `dsh-graph-host/lib/client/helpers.js` | 42998 / 0 | 43868 / 870 | 43868 / 870 |
+
+So:
+* `git ls-files dist` = 39 and the **working-tree `dist/lib/client.js` is byte-identical to the committed blob** (same size, same SHA-256) — the artifact I served and hashed in V3 *is* the committed artifact. That is the strongest form of the V2.1 claim.
+* `dist/index.js` in the working tree is the CRLF checkout form; it is identical to `dsh-graph-host/index.js` in the same form (V2.9) and `node --check` passes.
+* A **fresh clone** with `core.autocrlf=true` (the setting on this machine) materialises the dist text files as CRLF — including `dist/lib/client.js` at 924 151 bytes. This is not a defect (CRLF JavaScript is valid, and the loader serves bytes), but it means "byte-fresh" must always be stated together with the checkout form. It also means the CRLF-sensitive guards of §12.3 would behave differently on a fresh clone (both sides CRLF) than in a locally built tree (sources CRLF / bundle LF).
+
+### 12.2 V1 re-issued — PASS (12/12), with the engines truth table
+
+`node scripts/verify-package.mjs` at `7e8e016`:
+
+```
+V1.12 PASS engines.dsh range includes 0.2.0-rc.2
+     engines.dsh=">=0.1.5-rc.2 <0.2.1-0 || >=0.2.0-rc.1 <0.2.1-0"
+     satisfies(0.2.0-rc.2)=true  satisfies(includePrerelease)=true   via semver 7.8.5
+```
+
+Independently re-evaluated truth table (`node -e`, semver 7.8.5, default semantics):
+
+| version | satisfies | | version | satisfies |
+|---|---|---|---|---|
+| 0.1.4 | false | | 0.2.0-rc.0 | **false** |
+| 0.1.5-rc.1 | false | | 0.2.0-rc.1 | **true** |
+| 0.1.5-rc.2 | true | | **0.2.0-rc.2 (desktop host)** | **true** |
+| 0.1.5-rc.3 (CLI used here) | true | | 0.2.0 | true |
+| 0.1.6 / 0.1.7 / 0.1.99 | true | | 0.2.1-rc.1 | false |
+| | | | 0.2.1 / 0.3.0 | false |
+
+Old range for contrast: `0.2.0-rc.1 → false`, `0.2.0-rc.2 → false`, `0.2.0 → true`.
+
+The range string is present in all three manifests (`package.json`, `dsh-graph-host/package.json`, `dist/package.json`) — checked explicitly because `dist/package.json` is generated and was briefly stale during the change window (it was rebuilt at 10:28:45, 21 s after this verifier first observed the drift; the final pass shows all three consistent). One nuance, not a defect unless unintended: **`0.2.0-rc.0` is excluded** (it is below `>=0.2.0-rc.1`).
+
+### 12.3 V2 re-issued (10/10) and V7 — **0 new failures, 1 fixed**
+
+`node scripts/verify-package.mjs` → V2.1 PASS (`tracked_files=39`), V2.2–V2.10 PASS (banner present, `node --check` both artifacts exit 0, `bundle_id=goal-dashboard`, manifest/name/version consistent, byte-freshness vs sources PASS, `core_ts=16 stale=[]`).
+
+`node --test --test-reporter=tap core/tests/*.test.ts` on the clean commit, diffed against the pristine-HEAD baseline:
+
+| run | tests | pass | fail | cancelled | top-level `not ok` | incl. nested |
+|---|---|---|---|---|---|---|
+| baseline (pristine `7dffb03`) | 1514 | 1408 | 104 | 2 | 102 | 108 |
+| **final (`7e8e016`)** | 1532 | **1427** | **103** | 2 | 101 | **107** |
+
+```
+NEW failures (0):
+no-longer-failing (1):
+  [g352-narrow-width.test.ts] g-352 att-005：会话内看板页签签名 == 冻结 fixture，且 fixture 的来源 commit/内容 hash 头自校验
+```
+
+The `+18` tests are the new `skills-workflow.test.ts` (re-run separately at this commit: **18/18 PASS**). `scripts/verify-tools.mjs` at this commit: 54 tools, all five `graph_workflow_*`/`graph_skills_catalog` PRESENT, 60 REST routes, no `export default`.
+
+#### (a) Classification of the 15 failures the Lead listed — **all pre-existing, none caused by our diff**
+
+Method: each named test was located in **both** TAPs by file+line+name, and the error strings compared verbatim. Every entry below appears identically in the pristine-HEAD baseline; the only delta between the runs is the one *fixed* test above.
+
+| Lead's item | test (file:line) | mechanism (verified) | pre-existing? |
+|---|---|---|---|
+| client #80 | `client.test.ts:1911` g-181 | `helpers.indexOf("\n    }\n")` vs a **CRLF** source: raw → `hookEnd=6` (fails); EOL-normalised → `hookEnd=12232` (passes) | YES — identical |
+| client #116 | `client.test.ts:2767/2776` g-223 (2 nested) | `test did not finish before its parent and was cancelled` — these *are* the 2 `cancelled` tests in both runs | YES — identical |
+| client #140 | `client.test.ts:3659` g-244 | `bundle.includes(pluginSlice)`: slice from CRLF `plugin.js`, bundle built **LF** → raw `false`, normalised `true` | YES — identical |
+| (extra) | `client.test.ts:2969` g-189 | `ENOENT … 'E:\\E:\\…\\Goal%20Dashboard\\dist\\index.js'` — the test prefixes a drive letter to a URL-encoded path | YES — identical |
+| g347 #213 | `g347-help-asset-guard.test.ts:510` | `EPERM … symlink node_modules → tmp` (no Developer-Mode symlink privilege) | YES — identical |
+| g352 #219 | `g352-narrow-width.test.ts:211` | `\n` multi-line regex vs CRLF: matches **only** after EOL normalisation (`kanban.js`) | YES — identical |
+| g352 #221 | `g352-narrow-width.test.ts:248` | same class (`kanban.js`) | YES — identical |
+| g352 #223 | `g352-narrow-width.test.ts:320` | same class (`goal-modal.js`) | YES — identical |
+| g352 #224 | `g352-narrow-width.test.ts:334` | `EPERM … rename …versions\v-a\goals\g-001 → …` | YES — identical |
+| g352 #228 | `g352-narrow-width.test.ts:468` | same class (`card.js`) | YES — identical |
+| g352 #229 | `g352-narrow-width.test.ts:488` | same class (`kanban.js`) | YES — identical |
+| g352 #232 | `g352-narrow-width.test.ts:575` | `build-client.sh 执行失败…spawnSync bash ENOENT` (no `bash` on `PATH` for `spawnSync`) | YES — identical |
+| plugin #295 | `plugin.test.ts:17` | `EPERM … rename …versions\v-t\goals\g-001 → …goals\g-001` | YES — identical |
+| root #313 | `root.test.ts:50` | expects `/base/.dsh-graph`, gets `E:\base\.dsh-graph` (POSIX literal vs Windows `resolve`) | YES — identical |
+| root #324 | `root.test.ts:218` | expects `/custom/graph`, gets `E:\custom\graph` — same class | YES — identical |
+| g-113 #298 | `plugin.test.ts:163` | hard-coded `".dsh-graph/versions/v-t/goals/"` (forward slashes); line 162, computed via `path.relative`, **passes** — so the prompt uses `\` on Windows | YES — identical |
+
+Decisive evidence for the CRLF class — `scripts/verify-crlf.mjs` re-evaluates the *exact regex literal printed in the TAP* against the real sources twice:
+
+```
+TAP=tmp/verify/final-7e8e016.tap
+failure blocks containing a printed regex: 5
+CRLF-ARTEFACT (matches only after EOL normalisation)  × 5
+  … minWidth: 0,\n\s*overflow: "hidden",\n\s*cursor: "default",      raw=false lf=true  (kanban.js)
+  … const standaloneLaneDefault = !!(narrowSingleTier && …           raw=false lf=true  (kanban.js)
+  … !isArchived\n\s*\? h\(VersionSelectorButton, \{                   raw=false lf=true  (goal-modal.js)
+  … open \? h\("div", \{\n\s*style: S\.inlineMenu,                    raw=false lf=true  (card.js)
+  … active\.length === 0\n\s*\? h\("div", …                          raw=false lf=true  (kanban.js)
+--- summary: crlf-only=5 not-explained=0 skipped=0 ---
+```
+
+And the two non-regex cases (`tmp/verify/eol-cases.mjs`):
+
+```
+helpers.js         870 CRLF / 0 LF      dist/lib/client.js  0 CRLF / 15975 LF
+g-181 raw         hookStart=12121 hookEnd=6      assertion=false
+g-181 normalised  hookStart=11882 hookEnd=12232  assertion=true
+g-244 resolverSrc length=6182 contains CRLF=true
+g-244 bundle.includes(rawSlice)             = false   <- what the test asserts
+g-244 norm(bundle).includes(norm(rawSlice)) = true
+g-113 plugin.test.ts:163 hard-codes "/" while path.sep = "\\" (win32); line 162 passes
+```
+
+**Verdict for (a):** every one of the 15 is a pre-existing environment artefact — Windows CRLF mismatches (8), `EPERM` symlink/rename without Developer Mode (3), `spawnSync bash` not found (1), POSIX absolute-path literals (2), POSIX separator vs `path.sep` (1), and 2 parent-cancelled async subtests. **Nothing is caused by the Goal-Dashboard diff**, and the diff additionally removed one failure.
+
+#### (b) Independent check of the g-352 att-005 re-freeze — **PASS, not laundered**
+
+`node tmp/verify/verify-g352-refreeze.mjs` (re-derives the frozen body hash and the source fingerprint from scratch, using the guard's own rules):
+
+```
+headers: source-commit  6d5500ac… -> 7dffb032…   changed=true
+         source-sha256  2bf46cbd… -> 4497b38c…   changed=true
+         content-sha256 0e6b7094… -> 0e6b7094…   changed=FALSE
+line-level diff HEAD~1 -> HEAD: 62 -> 62 lines, differing lines = 2
+  L2 - # source-commit: 6d5500ac…   + # source-commit: 7dffb032…
+  L3 - # source-sha256: 2bf46cbd…   + # source-sha256: 4497b38c…
+  only header lines changed = true
+bodyHash(head body)        = 0e6b7094deafa61e0525d617f792a8da30b9aeba1a3c72cb221ee4061f783ed3
+meta content-sha256 (head) = 0e6b7094deafa61e0525d617f792a8da30b9aeba1a3c72cb221ee4061f783ed3
+content-sha256 matches body = true
+body identical prev vs head = true  (55 lines)
+sourceFingerprint(repo)     = 4497b38cdf7d4fcb457736d941d9b49c58808f82e9d00bf91b8cc64861fabdf9
+meta source-sha256 (head)   = 4497b38cdf7d4fcb457736d941d9b49c58808f82e9d00bf91b8cc64861fabdf9
+source-sha256 matches       = true
+body lines containing a title string = 0
+body lines that look like they carry free text = 0
+```
+
+So the frozen 250 px signature is a **structure/style/flags** signature — every body line is `tag key=… class=… style=… flags=…`, with no text payload — which is exactly why a title-only source edit (the rebrand) cannot change it. The body and its hash are byte-identical to the v0.17.0 freeze, the recomputed `content-sha256` matches the body, and the recomputed `source-sha256` matches the new header. The re-freeze is legitimate; nothing was laundered. (Baseline had this test red with `fixture 内容 hash 与正文不一致（被手改过？）`; it is now green — the single V7 improvement.)
+
+### 12.4 V3/V4 re-issued on the **real 0.2.0-rc.2 host** — PASS
+
+The runtime was installed from the configured registry — `npm view @deepseek-ai/dsh@0.2.0-rc.2` → `version = '0.2.0-rc.2'`, dist-tag `latest = 0.2.0-rc.2`; `pnpm add @deepseek-ai/dsh@0.2.0-rc.2` → 531 packages in 19.8 s; the installed CLI reports **`0.2.0-rc.2`**. Instance: `DSH_HOME=./tmp/verify-rc2/home`, workspace `./tmp/verify-rc2/ws`, **port 3083** (19387/3080 untouched), plugin installed with the *real* route `dsh plugin --profile web add "link:C:/…/Temp/gd-verify-rc2"` (space-free copy of the final `dist/`, hashes equal to the repo's).
+
+```
+--dump-config    → # == goal-dashboard / - id: dsh-graph-host / name: goal-dashboard / config.root: .dsh-graph
+profile manifest → dsh.profile.bundles: [@deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, goal-dashboard]
+plugin log       → [dsh-graph-host] apply: tools + /api/dsh-graph(+goal+write) registered
+marker.json      → plugin=dsh-graph-host tools=54 validate=PASS  (incl. graph_workflow_list/start/advance/status, graph_skills_catalog)
+
+GET /?token (303) → GET / (200 text/html 35120 B); __DSH_BOOT__ present, "goal-dashboard"×5 / "dsh-graph"×0
+ROW  {"id":"goal-dashboard","url":"plugins/??goal-dashboard/client.js&rev":"3c1966f44a43","rev":"3c1966f44a43",
+      "inject":["@deepseek-ai/dsh-client-runtime","@deepseek-ai/dsh-client-ui-settings",
+                "@deepseek-ai/dsh-client-ui-primitives","@deepseek-ai/dsh-client-ui-sidebar-right"]}
+GET /plugins/??goal-dashboard/client.js&rev=3c1966f44a43 -> 200 text/javascript; charset=utf-8 bytes=908248
+      bundle loader id = goal-dashboard          (expected goal-dashboard)
+NEGATIVE wrong rev   -> 404      NEGATIVE unknown pkg -> 404      /plugins/goal-dashboard/client.js -> 404
+combo batch (8 loader ids, includes goal-dashboard) -> 200 text/javascript bytes=1811516
+
+GET /api/dsh-graph/workflow?workspace=<ws>&goal=g-002 -> 200 {"goal","workflow","presets","catalog"}
+      workflow=wf-1d074a86 stage=grill 1/6 status=active state=active,pending,pending,pending,pending,pending
+      presets=5  catalog=37
+GET /api/dsh-graph/workflows?workspace=<ws>           -> 200 {"active":[…wf-1d074a86…]}
+NEGATIVE /workflow without goal                       -> 400 {"error":"missing goal"}
+```
+
+Served bytes are the committed artifact: `tmp/verify/compare-served.mjs` → served 908 248 B minus the host's trailer = 908 179 B = `dist/lib/client.js` (908 176 B) + the host's own `"\n;\n"` separator; **common prefix identical**, same SHA-256 pattern as the 0.1.5-rc.3 run (`37b7fe06…` after stripping only the trailer).
+
+**Version-specific differences worth recording** (both hosts behave correctly, but the wire format differs):
+* 0.1.5-rc.3 advertises **root-absolute** row URLs (`/plugins/??…`); **0.2.0-rc.2 advertises document-relative URLs** (`plugins/??…`) and HTML-escapes `&` as `&amp;`. A checker that string-compares against `/plugins/<pkg>/client.js` must be written for the version it targets; the harness now normalises both.
+* Revision tokens differ in shape (`d241fd814a0bd615-48` vs `887ce540d83e` / `3c1966f44a43`); only the advertised URL is served, and a wrong rev 404s on both.
+* Neither host serves the bare, non-revisioned `/plugins/<pkg>/client.js` (404 on both) — the V3 acceptance criterion as originally written does not hold on either host version.
+
+### 12.5 Residual risk after the final pass
+
+* The desktop **Electron shell** (the app window boot, its own `__DSH_BOOT__` injection and asset serving from `app.asar`) is still not exercised; what is proven on 0.2.0-rc.2 is the DSH runtime + plugin tree + client-modules route, not the desktop wrapper.
+* No browser was used, so "served, identified, revision-pinned" is not "rendered"; the workflow strip's visible output remains unverified (§9.3).
+* LLM-driven tool execution remains unverified (§9.4); the workflow tools are proven *registered* on both hosts and their core functions are proven by direct exercise (§7).
+* 103 pre-existing failures remain (Windows env/EOL, per §12.3(a)). The suite is not green, and this report does not claim it is.
+* The `dsh plugin add` space bug (§12.3 alternative: see V1.13 / §2) is upstream and unfixed.
+* **Desktop-profile observation (not caused by this verifier).** At the first pass the live profile `C:\Users\silence\.dsh\profiles\desktop\package.json` was `mtime 2026-10-02T09:40:41+08:00` with `"dsh-graph": "^0.17.0"` in `dependencies` and no graph/dashboard entry in `dsh.profile.bundles`. At teardown of the final pass the same file is `mtime 2026-10-02T10:32:41+08:00` and its `dependencies` section is **gone entirely** (`dependencies: undefined`), while `bundles` still contains no `dsh-graph`/`goal-dashboard`. This verifier never wrote to that path (every write went to `./tmp/verify*` or `%TEMP%`); the change came from another actor (the live GUI/plugin manager or the Lead). It does not affect any verdict here — the desktop profile was only ever *read* — but the earlier "untouched" statement in §4/V3.5 covers the first pass only.
