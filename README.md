@@ -70,17 +70,35 @@ dsh plugin --profile desktop remove goal-dashboard
 
 ## 看板页面
 
-插件若探测到宿主的 `webServer` 服务（web 组合下提供），会注册一个**只读**页面路由：
+插件在**自己的 loopback 端口**上提供一个只读看板页面：
 
 ```
-http://127.0.0.1:<port>/goal-dashboard
+http://127.0.0.1:8931/          # 默认端口，由 boardPort 配置
 ```
 
-页面是服务端渲染的静态 HTML（零前端依赖、不发任何写请求），刷新即最新。
-也可带 `?workspace=<绝对路径>` 指定要看的 workspace。
+- `boardPort: 0` → 用系统分配的随机端口；`boardPort: false` → 完全关闭看板服务
+- 端口被占用时自动退回到临时端口，不会因此失去看板
+- 服务只绑定 `127.0.0.1`，只读、无脚本、不发写请求；刷新即最新
+- 可带 `?workspace=<绝对路径>` 指定要看的工作区
+- 实际地址会打印到宿主 stderr，也可用 `board_help` 查到
 
-`webServer` 可能在 `apply()` 之后才激活，因此采用有界轮询注册；**始终探测不到也不会报错**——
-headless 组合下工具照常可用，只是没有页面。
+### 为什么不能放在宿主 webServer 的端口上
+
+因为**放上去就一定打不开**。桌面版对嵌入式浏览器（侧边栏「浏览器」）的每次导航都过这道谓词：
+
+```js
+allowedNavigation(url)  = http(s) && 无凭据 && !isApplicationHost(url)
+isApplicationHost(url)  = url.port === 应用端口
+                        && hostname ∈ {应用主机, localhost, 127.0.0.1, [::1]}
+```
+
+而且该浏览器会话还会**直接取消**命中 `isApplicationHost` 的请求。因此在 DSH 内部打开由宿主
+webServer（`127.0.0.1:19387`）提供的页面，必然落到「页面加载失败；请刷新重试或在系统浏览器中打开」，
+或更早一步被地址栏判为「不能在嵌入浏览器中打开 DSH 应用自身」。**这是应用自身的设计，不是页面写坏了。**
+
+换一个 loopback 端口（默认 8931）就满足该谓词，于是能在 DSH 里正常打开 —— 这就是本插件
+另起一个端口的原因。宿主 webServer 上的 `/goal-dashboard` 路由仍然保留，但只对**系统浏览器**有用，
+不要用它做嵌入式打开。
 
 ---
 

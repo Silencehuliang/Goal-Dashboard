@@ -29,6 +29,7 @@ import {
 } from "./lib/store.js";
 import { WORKFLOW_PRESETS, skillCatalog, skillCategories } from "./lib/skills.js";
 import { renderBoardHtml } from "./lib/board.js";
+import { startBoardServer } from "./lib/server.js";
 
 export const name = "goal-dashboard";
 export const inject = ["tools"];
@@ -92,6 +93,10 @@ export function apply(ctx, config) {
 
   /** Who performed the action, recorded on every event. */
   const actorOf = (exec) => `agent:${exec?.agent?.id ?? "dsh"}`;
+
+  /** Board page URL once the loopback server is listening (reported by board_help). */
+  let boardUrl = null;
+  let boardServer = null;
 
   const tools = [
     {
@@ -260,6 +265,11 @@ export function apply(ctx, config) {
         invariant: "判据先于执行：进入 in_progress 前必须至少登记一条判据。",
         presets: WORKFLOW_PRESETS.map((p) => p.id),
         data: "<workspace>/.goal-board/（goals/<slug>.json + 只追加 events.jsonl）",
+        board_page: boardUrl ?? "（看板服务尚未就绪；若 boardPort=0 则为已禁用）",
+        board_note:
+          "看板服务只监听 127.0.0.1，用独立端口提供只读页面。" +
+          "不要用宿主 webServer 的端口打开它：桌面版嵌入式浏览器按设计拒绝应用自身的主机（端口相同 + localhost/127.0.0.1），" +
+          "这正是宿主提示「不能在嵌入浏览器中打开 DSH 应用自身」的原因。",
         tools: tools.map((t) => t.def.name),
       }),
     },
@@ -339,9 +349,46 @@ export function apply(ctx, config) {
       });
     }
 
+    // Board page on its OWN loopback port.
+    //
+    // The host's web server cannot serve it: the desktop refuses to display its
+    // own origin inside the embedded browser (same port + localhost/127.0.0.1),
+    // and cancels those requests outright. A different loopback port is accepted,
+    // which is what makes the board openable inside DSH. See lib/server.js.
+    const preferredPort = Number.isInteger(config?.boardPort) ? config.boardPort : 8931;
+    startBoardServer({
+      port: preferredPort,
+      render: (workspace) => {
+        const root = resolveBoardRoot(
+          workspace ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? null,
+          configRoot,
+        );
+        ensureBoard(root);
+        return renderBoardHtml(boardSnapshot(root), { now: new Date().toISOString() });
+      },
+    })
+      .then((handle) => {
+        boardServer = handle;
+        if (handle.ok) {
+          boardUrl = handle.url;
+          process.stderr.write(`[goal-dashboard] board page: ${handle.url}\n`);
+        } else if (!handle.disabled) {
+          process.stderr.write(
+            `[goal-dashboard] board server unavailable: ${handle.error?.message ?? "unknown"}\n`,
+          );
+        }
+      })
+      .catch(() => {
+        /* the board server must never take the plugin down with it */
+      });
+
+    disposers.push(() => {
+      try { boardServer?.close?.(); } catch { /* already closed */ }
+    });
+
     process.stderr.write(
       `[goal-dashboard] apply: ${tools.length} tools registered` +
-        (routeState.registered ? " + board page" : "; board page pending (webServer not up yet)") +
+        (routeState.registered ? " + host route /goal-dashboard" : "") +
         "\n",
     );
 

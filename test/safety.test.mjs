@@ -5,7 +5,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -13,7 +14,7 @@ const repoRoot = join(import.meta.dirname, "..");
 const read = (rel) => readFileSync(join(repoRoot, rel), "utf8");
 const pkg = () => JSON.parse(read("package.json"));
 
-const SOURCE_FILES = ["index.js", "lib/model.js", "lib/store.js", "lib/skills.js", "lib/board.js"];
+const SOURCE_FILES = ["index.js", "lib/model.js", "lib/store.js", "lib/skills.js", "lib/board.js", "lib/server.js"];
 
 test("package.json declares no dsh.client", () => {
   const manifest = pkg();
@@ -114,5 +115,42 @@ test("declared tool names are unique, prefixed, and strictly typed", async () =>
     assert.equal(typeof def.execute, "function");
     assert.equal(def.output?.schema?.type, "object");
     assert.equal(typeof def.output?.render, "function");
+  }
+});
+
+test("the board server binds to loopback only, never to all interfaces", () => {
+  const src = read("lib/server.js");
+  assert.match(src, /"127\.0\.0\.1"/, "must bind explicitly to 127.0.0.1");
+  assert.doesNotMatch(src, /0\.0\.0\.0/, "must never listen on every interface");
+});
+
+test("apply() brings up a reachable board page on a loopback port", async () => {
+  const { apply } = await import(pathToFileURL(join(repoRoot, "index.js")).href);
+  const registered = [];
+  // A workspace is required, exactly as on the host: without one the board has
+  // nothing to show, and the page must say so rather than render an empty shell.
+  const workspace = mkdtempSync(join(tmpdir(), "goal-dashboard-apply-"));
+  const ctx = {
+    get: (n) => (n === "sandboxPolicy" ? { workspaceRoot: workspace } : undefined),
+    effect: (fn) => fn(),
+    tools: { register: (def) => { registered.push(def); return () => {}; }, get: () => ({}) },
+  };
+  const dispose = apply(ctx, { boardPort: 0 });
+  try {
+    // The listen is asynchronous; give it a moment, then read the URL the
+    // plugin reports rather than assuming a port.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const help = registered.find((d) => d.name === "board_help");
+    const out = await help.execute({}, {});
+    assert.match(
+      out.board_page,
+      /^http:\/\/127\.0\.0\.1:\d+\/$/,
+      `board_help must publish the loopback URL, got: ${out.board_page}`,
+    );
+    const res = await fetch(out.board_page);
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), /Goal Dashboard/);
+  } finally {
+    dispose?.();
   }
 });

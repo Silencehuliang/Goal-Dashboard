@@ -14,9 +14,16 @@
 #   这个失败面。回归守卫见 test/safety.test.mjs。
 #
 # 配置项：
-#   root —— 数据目录，相对 workspace；默认 .goal-board。绝对路径则忽略 workspace。
+#   root      —— 数据目录，相对 workspace；默认 .goal-board。绝对路径则忽略 workspace。
+#   boardPort —— 看板页面的监听端口（仅 127.0.0.1）。默认 8931；设为 0 则用系统分配的随机端口；
+#                设为 false 可完全禁用看板服务。
+#                之所以要独立端口：桌面版嵌入式浏览器**按设计拒绝**应用自身的主机
+#                （端口与应用相同 + localhost/127.0.0.1），会直接取消该请求 —— 所以
+#                宿主 webServer 那个端口上的页面永远打不开。换一个 loopback 端口即可。
+#                端口被占用时会自动退回到系统分配的临时端口（并在 stderr 打印实际地址）。
 - insert:
     - id: goal-dashboard
       name: goal-dashboard
       config:
         root: .goal-board
+        boardPort: 8931
