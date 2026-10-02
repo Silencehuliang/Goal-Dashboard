@@ -237,7 +237,7 @@ test("boardSnapshot groups cards into columns and counts events", () => {
   const snap = boardSnapshot(root);
   assert.equal(snap.total, 1);
   assert.equal(snap.byStatus.planning.length, 1);
-  assert.equal(snap.byStatus.planning[0].criteria, 0);
+  assert.equal(snap.byStatus.planning[0].criteria.length, 0);
   assert.equal(snap.byStatus.planning[0].criteriaVerified, false);
   assert.ok(snap.events >= 2);
 });

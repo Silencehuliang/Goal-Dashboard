@@ -20,15 +20,14 @@
  */
 
 import {
-  BoardError, GOAL_TYPES, STATUSES, allCriteriaVerified, criteriaItems,
+  BoardError, GOAL_TYPES, STATUSES, TRANSITIONS, allCriteriaVerified, boardColumns, criteriaItems,
 } from "./lib/model.js";
 import {
-  addNote, advanceWorkflow, appendEvent, boardSnapshot, createGoal, ensureBoard,
+  addNote, advanceWorkflow, boardSnapshot, createGoal, ensureBoard,
   listGoals, markCriterion, readGoal, resolveBoardRoot, setArchived, setCriteria,
   startWorkflow, transitionGoal, validateBoard,
 } from "./lib/store.js";
 import { WORKFLOW_PRESETS, skillCatalog, skillCategories } from "./lib/skills.js";
-import { renderBoardHtml } from "./lib/board.js";
 import { startBoardServer } from "./lib/server.js";
 
 export const name = "goal-dashboard";
@@ -97,6 +96,67 @@ export function apply(ctx, config) {
   /** Board page URL once the loopback server is listening (reported by board_help). */
   let boardUrl = null;
   let boardServer = null;
+
+  /** Root for a board-page request: an explicit workspace, else the host workspace. */
+  const rootForWorkspace = (workspace) => {
+    const root = resolveBoardRoot(workspace ?? workspaceOf(null), configRoot);
+    ensureBoard(root);
+    return root;
+  };
+
+  /** State payload for the board page (GET /api/state). */
+  const snapshotFor = (workspace) => {
+    const root = rootForWorkspace(workspace);
+    return {
+      ...boardSnapshot(root),
+      archivedCount: listGoals(root, { includeArchived: true }).filter((g) => g.archived === true).length,
+      columns: boardColumns(),
+      transitions: TRANSITIONS,
+      presets: WORKFLOW_PRESETS.map((p) => ({
+        id: p.id,
+        title: p.title,
+        stages: p.stages.map((s) => s.id),
+      })),
+    };
+  };
+
+  /**
+   * Board-page commands (POST /api/command). This only maps names onto store
+   * operations — the store validates every invariant. Two rules live here
+   * because the embedded webview cannot show a dialog to ask:
+   * `blocked` must carry a reason, and `archive` must be explicit.
+   */
+  const runCommand = (cmd, payload, workspace) => {
+    const root = rootForWorkspace(workspace);
+    const actor = "human:board-ui";
+    switch (cmd) {
+      case "createGoal":
+        return { goal: createGoal(root, { title: payload.title, type: payload.type, description: payload.description }, actor).id };
+      case "setCriteria":
+        return { goal: setCriteria(root, payload.goal, payload.criteria, actor).id };
+      case "markCriterion":
+        return { goal: markCriterion(root, payload.goal, payload.criterion, payload.verified !== false, actor).id };
+      case "transition": {
+        if (!payload.to) throw new BoardError("缺少目标状态 to");
+        if (payload.to === "blocked" && String(payload.reason ?? "").trim().length === 0) {
+          throw new BoardError("进入 blocked 必须在原因框里填写原因");
+        }
+        return {
+          goal: transitionGoal(root, payload.goal, payload.to, { reason: payload.reason, force: payload.force === true }, actor).id,
+        };
+      }
+      case "note":
+        return { goal: addNote(root, payload.goal, payload.text, actor).id };
+      case "archive":
+        return { goal: setArchived(root, payload.goal, payload.archived !== false, actor).id };
+      case "workflowStart":
+        return { goal: startWorkflow(root, payload.goal, payload.preset, actor, { restart: payload.restart === true }).id };
+      case "workflowAdvance":
+        return { goal: advanceWorkflow(root, payload.goal, { to: payload.to, note: payload.note }, actor).id };
+      default:
+        throw new BoardError(`未知命令：${cmd}`);
+    }
+  };
 
   const tools = [
     {
@@ -309,17 +369,19 @@ export function apply(ctx, config) {
         const off = webServer.register({
           path: "/goal-dashboard",
           handler: (req, res) => {
+            // The host's own port can never be embedded (see lib/server.js), and
+            // this shell's assets live on the board server — so send the browser
+            // to the real board instead of serving a broken page here.
             try {
-              const url = new URL(req?.url ?? "/", "http://localhost");
-              const root = resolveBoardRoot(
-                url.searchParams.get("workspace") ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? null,
-                configRoot,
-              );
-              const html = renderBoardHtml(boardSnapshot(root), { now: new Date().toISOString() });
-              res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-              res.end(html);
+              if (boardUrl) {
+                res.writeHead(302, { location: boardUrl, "cache-control": "no-store" });
+                res.end();
+                return;
+              }
+              res.writeHead(503, { "content-type": "text/plain; charset=utf-8" });
+              res.end("goal-dashboard: board server not ready yet; retry in a moment\n");
             } catch (error) {
-              res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+              res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
               res.end(`goal-dashboard: ${error?.message ?? error}\n`);
             }
           },
@@ -356,17 +418,7 @@ export function apply(ctx, config) {
     // and cancels those requests outright. A different loopback port is accepted,
     // which is what makes the board openable inside DSH. See lib/server.js.
     const preferredPort = Number.isInteger(config?.boardPort) ? config.boardPort : 8931;
-    startBoardServer({
-      port: preferredPort,
-      render: (workspace) => {
-        const root = resolveBoardRoot(
-          workspace ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? null,
-          configRoot,
-        );
-        ensureBoard(root);
-        return renderBoardHtml(boardSnapshot(root), { now: new Date().toISOString() });
-      },
-    })
+    startBoardServer({ port: preferredPort, snapshot: snapshotFor, command: runCommand })
       .then((handle) => {
         boardServer = handle;
         if (handle.ok) {
