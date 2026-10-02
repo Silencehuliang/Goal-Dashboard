@@ -1,44 +1,11 @@
-node_modules
 node_modules/
+node_modules
 *.log
+.DS_Store
 /tmp/
-probe/
+.tmp/
 
-core-dist/
-
-# ============================================================================
-# Goal-Dashboard 有意**提交** dist/（与上游 dsh-graph 相反）。
-# 原因：pnpm 拒绝在未列入 allowBuilds 时执行 git 依赖的 prepare 构建脚本
-# (ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED)，会让 `dsh plugin add github:...` 失败。
-# 仓库根 package.json 即插件清单（main → dist/index.js），预构建产物入库后
-# 安装无需任何构建步骤。改源码后请运行 `pnpm build` 并把 dist/ 一起提交。
-# 来源可核对：pnpm test 的 g312 dist-freshness 守卫会校验 dist 与源码一致。
-# ============================================================================
-
-# g-348：build.sh 的原子发布暂存根（`.dist-stage.XXXXXX/`，与 dist 同文件系统，
-# 全部步骤成功后 `mv -T --exchange` 与 dist 原子互换；EXIT trap 负责清理）。
-# 正常/失败路径都不残留；仅 SIGKILL 会留下惰性残留，故加忽略规则兜底。
-/.dist-stage.*/
-# 退化路径（mv 无 --exchange）用于暂存旧 dist 的临时名，同样兜底忽略。
-/dist.prev.*/
-
-# g-319：dsh-graph-host/core/*.js 是 core/*.ts 的编译产物，不再跟踪。
-# dsh-graph-host/lib/client.js 是客户端模块拼接产物，不再跟踪。
-# 构建流水线（pnpm build / pnpm prepack / npm prepare）自动编译到 dist/。
-# GitHub 源码安装（github:owner/repo）通过 prepare 脚本自动触发构建。
-dsh-graph-host/core/
-dsh-graph-host/lib/client.js
-
-# g-149：看板数据由 .dsh-graph 内层 Git 仓库独立管理；父代码仓库不再跟踪。
-/.dsh-graph/
-
-# 子代理在包目录、子 Agent cwd 或 linked worktree 跑 graph 工具时误 init 的 .dsh-graph 骨架
-#（非项目数据、非 git 跟踪）——阻止污染 git status。已跟踪的根 .dsh-graph 不受影响（gitignore 只拒新文件）。
-**/.dsh-graph/
-
-# g-121：HANDOFF 旧版归档目录（<root>/handoffs/）不入 git——旧交接文件不提交入库
-handoffs/
-
-# g-142：worktree 目录不入 git——避免误提交 .worktrees/** 污染
-.worktrees/
-.pnpm-store/
+# 看板数据目录：正常情况下落在用户 workspace 下（不是本仓库）。
+# 若有人拿本仓库当 workspace 试用，这里兜底忽略，避免把个人看板数据提交进插件仓库。
+.goal-board/
+**/.goal-board/

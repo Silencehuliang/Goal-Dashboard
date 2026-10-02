@@ -1,0 +1,224 @@
+[
+  {
+    "name": "ask-matt",
+    "category": "engineering",
+    "invocation": "user",
+    "description": "Ask which skill or flow fits your situation. A router over the skills in this repo."
+  },
+  {
+    "name": "code-review",
+    "category": "engineering",
+    "invocation": "model",
+    "description": "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \\\"review since X\\\"."
+  },
+  {
+    "name": "codebase-design",
+    "category": "engineering",
+    "invocation": "model",
+    "description": "Shared vocabulary for designing deep modules. Use when the user wants to design or improve a module's interface, find deepening opportunities, decide where a seam goes, make code more testable or AI-navigable, or when another skill needs the deep-module vocabulary."
+  },
+  {
+    "name": "diagnosing-bugs",
+    "category": "engineering",
+    "invocation": "model",
+    "description": "Diagnosis loop for hard bugs and performance regressions. Use when the user says \"diagnose\"/\"debug this\", or reports something broken/throwing/failing/slow."
+  },
+  {
+    "name": "domain-modeling",
+    "category": "engineering",
+    "invocation": "model",
+    "description": "Build and sharpen a project's domain model. Use when discussing codebase terminology, writing or editing a GLOSSARY.md, or recording or editing an ADR."
+  },
+  {
+    "name": "grill-with-docs",
+    "category": "engineering",
+    "invocation": "user",
+    "description": "A relentless interview to sharpen a plan or design, which also creates docs (ADR's and glossary) as we go."
+  },
+  {
+    "name": "implement",
+    "category": "engineering",
+    "invocation": "user",
+    "description": "Implement a piece of work based on a spec or set of tickets."
+  },
+  {
+    "name": "implement-spec",
+    "category": "engineering",
+    "invocation": "user",
+    "description": "Implement the result of /to-spec and /to-tickets in code."
+  },
+  {
+    "name": "improve-codebase-architecture",
+    "category": "engineering",
+    "invocation": "user",
+    "description": "Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick."
+  },
+  {
+    "name": "pr",
+    "category": "engineering",
+    "invocation": "model",
+    "description": "Use when writing a PR body."
+  },
+  {
+    "name": "prototype",
+    "category": "engineering",
+    "invocation": "model",
+    "description": "Build a throwaway prototype to answer a design question. Use when the user wants to sanity-check whether a state model or logic feels right, or explore what a UI should look like."
+  },
+  {
+    "name": "research",
+    "category": "engineering",
+    "invocation": "model",
+    "description": "Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo. Use when the user wants a topic researched, docs or API facts gathered, or reading legwork delegated to a background agent."
+  },
+  {
+    "name": "retro",
+    "category": "engineering",
+    "invocation": "user",
+    "description": "Conduct a retrospective on a coding session."
+  },
+  {
+    "name": "setup-matt-pocock-skills",
+    "category": "engineering",
+    "invocation": "user",
+    "description": "Configure this repo for the engineering skills: set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills."
+  },
+  {
+    "name": "tdd",
+    "category": "engineering",
+    "invocation": "model",
+    "description": "Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions \"red-green-refactor\", or wants integration tests."
+  },
+  {
+    "name": "to-spec",
+    "category": "engineering",
+    "invocation": "user",
+    "description": "Turn the current conversation into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already discussed."
+  },
+  {
+    "name": "to-tickets",
+    "category": "engineering",
+    "invocation": "user",
+    "description": "Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker (edges as text in one file per ticket locally, or native blocking links on a real tracker)."
+  },
+  {
+    "name": "triage",
+    "category": "engineering",
+    "invocation": "user",
+    "description": "Move issues and external PRs through a state machine of triage roles, categorise, verify, grill if needed, and write agent-ready briefs."
+  },
+  {
+    "name": "wayfinder",
+    "category": "engineering",
+    "invocation": "user",
+    "description": "Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear."
+  },
+  {
+    "name": "wizard",
+    "category": "engineering",
+    "invocation": "model",
+    "description": "Generate an interactive bash wizard that walks a human through steps only they can perform. Use when provisioning infrastructure, setting up credentials or CI secrets, walking an unfamiliar third-party dashboard, or running a one-off migration or cutover. Don't invoke this for steps the agent can perform itself."
+  },
+  {
+    "name": "claude-handoff",
+    "category": "in-progress",
+    "invocation": "user",
+    "description": "Hand the current conversation off to a fresh background agent that picks up the work immediately."
+  },
+  {
+    "name": "loop-me",
+    "category": "in-progress",
+    "invocation": "user",
+    "description": "Grill me about specs for the workflows I want to build, within this workspace."
+  },
+  {
+    "name": "setup-ts-deep-modules",
+    "category": "in-progress",
+    "invocation": "user",
+    "description": "Wire dependency-cruiser into a TypeScript repo so each package is a deep module, with implementation hidden in subfolders and reachable only through its entry-point files. User-invoked."
+  },
+  {
+    "name": "writing-beats",
+    "category": "in-progress",
+    "invocation": "user",
+    "description": "Writing, exploit; assemble raw material into a journey of beats, grounding each term before a beat leans on it."
+  },
+  {
+    "name": "writing-fragments",
+    "category": "in-progress",
+    "invocation": "user",
+    "description": "Writing, explore: mine raw fragments, no structure yet."
+  },
+  {
+    "name": "writing-shape",
+    "category": "in-progress",
+    "invocation": "user",
+    "description": "Writing, exploit: shape raw material into an article, paragraph by paragraph."
+  },
+  {
+    "name": "git-guardrails-claude-code",
+    "category": "misc",
+    "invocation": "model",
+    "description": "Set up Claude Code hooks to block dangerous git commands (push, reset --hard, clean, branch -D, etc.) before they execute. Use when user wants to prevent destructive git operations, add git safety hooks, or block git push/reset in Claude Code."
+  },
+  {
+    "name": "migrate-to-shoehorn",
+    "category": "misc",
+    "invocation": "model",
+    "description": "Migrate test files from `as` type assertions to @total-typescript/shoehorn. Use when user mentions shoehorn, wants to replace `as` in tests, or needs partial test data."
+  },
+  {
+    "name": "scaffold-exercises",
+    "category": "misc",
+    "invocation": "model",
+    "description": "Create exercise directory structures with sections, problems, solutions, and explainers that pass linting. Use when user wants to scaffold exercises, create exercise stubs, or set up a new course section."
+  },
+  {
+    "name": "setup-pre-commit",
+    "category": "misc",
+    "invocation": "model",
+    "description": "Set up Husky pre-commit hooks with lint-staged (Prettier), type checking, and tests in the current repo. Use when user wants to add pre-commit hooks, set up Husky, configure lint-staged, or add commit-time formatting/typechecking/testing."
+  },
+  {
+    "name": "grill-me",
+    "category": "productivity",
+    "invocation": "user",
+    "description": "A relentless interview to sharpen a plan or design."
+  },
+  {
+    "name": "grilling",
+    "category": "productivity",
+    "invocation": "model",
+    "description": "Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases."
+  },
+  {
+    "name": "handoff",
+    "category": "productivity",
+    "invocation": "user",
+    "description": "Compact the current conversation into a handoff document for another agent to pick up."
+  },
+  {
+    "name": "teach",
+    "category": "productivity",
+    "invocation": "user",
+    "description": "Teach the user a new skill or concept, within this workspace."
+  },
+  {
+    "name": "to-questionnaire",
+    "category": "productivity",
+    "invocation": "user",
+    "description": "Turn a decision you can't fully answer into a questionnaire for someone else to fill in."
+  },
+  {
+    "name": "wait-what",
+    "category": "productivity",
+    "invocation": "user",
+    "description": "Stop. That last message did not land: re-pitch it."
+  },
+  {
+    "name": "writing-for-agents",
+    "category": "productivity",
+    "invocation": "model",
+    "description": "Writing documents for agents. Use when creating or editing skills, or modifying AGENTS.md or CLAUDE.md."
+  }
+]

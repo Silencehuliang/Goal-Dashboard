@@ -1,18 +1,22 @@
 {
   "name": "goal-dashboard",
-  "version": "0.18.0",
-  "description": "Goal-Dashboard — a goal kanban board for DeepSeek Harness (DSH), with mattpocock/skills workflow integration. Forked from miuzel/dsh-graph (MIT).",
+  "version": "0.19.0",
+  "description": "Goal Dashboard — a goal kanban board for DeepSeek Harness. Host half only (tools + a read-only board page); it deliberately declares no browser bundle so it cannot break the DSH GUI.",
   "license": "MIT",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "index.js",
   "exports": {
-    ".": "./dist/index.js",
-    "./client": "./dist/lib/client.js",
-    "./cordis.patch.yml": "./dist/cordis.patch.yml",
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "index.js",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "ATTRIBUTION.md",
+    "LICENSE"
   ],
   "keywords": [
     "dsh",
@@ -29,42 +33,14 @@
     "url": "https://github.com/Silencehuliang/Goal-Dashboard.git"
   },
   "engines": {
-    "node": ">=22",
-    "dsh": ">=0.1.5-rc.2 <0.2.1-0 || >=0.2.0-rc.1 <0.2.1-0"
+    "node": ">=22"
   },
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/schemastery": "^3.18.2",
-    "@deepseek-ai/dsh-settings": ">=0.1.5-rc.2 <0.2.1-0 || >=0.2.0-rc.1 <0.2.1-0"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": {
-      "optional": true
-    },
-    "@deepseek-ai/schemastery": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-settings": {
-      "optional": true
-    }
-  },
-  "dependencies": {
-    "yaml": "^2.9.0"
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
   },
   "dsh": {
     "bundle": {
-      "patch": "./dist/cordis.patch.yml"
+      "patch": "./cordis.patch.yml"
     }
-  },
-  "scripts": {
-    "build": "bash scripts/build.sh",
-    "test": "node --test core/tests/*.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
-  },
-  "devDependencies": {
-    "@types/node": "^26.2.0",
-    "playwright": "^1.63.0",
-    "typescript": "^5.7.0",
-    "yaml": "^2.9.0"
   }
 }

@@ -1,0 +1,22 @@
+# Goal Dashboard 的组合包层：以裸包名插入 profile 树，`dsh plugin add` 时自动激活。
+#
+# 本插件**只提供 host 半边**：目标看板工具（board_*）与一个只读的看板页面路由。
+# 它刻意**不声明 `dsh.client`** —— 这一点是硬约束，不要"补回来"：
+#
+#   宿主在 web boot 阶段会断言每个 client 条目都激活成功；只要有一条失败，整个
+#   Web UI 都起不来。而 client 条目激活失败最常见的原因，是它的 inject 列表里
+#   有宿主模块集合里不存在的包（桌面版 @deepseek-ai/dsh-desktop 0.2.0-rc.2 内置
+#   289 个 @deepseek-ai 包，其中**没有** dsh-client-runtime）。
+#
+#   上游 dsh-graph 正是因为 inject 里声明了 @deepseek-ai/dsh-client-runtime，
+#   在桌面版上必然激活失败 —— 桌面版崩溃日志 crash-2026-10-02T01-33-40 记的
+#   就是 "dsh-graph: failed"。把看板放在本插件自己的 HTTP 路由上，就彻底没有
+#   这个失败面。回归守卫见 test/safety.test.mjs。
+#
+# 配置项：
+#   root —— 数据目录，相对 workspace；默认 .goal-board。绝对路径则忽略 workspace。
+- insert:
+    - id: goal-dashboard
+      name: goal-dashboard
+      config:
+        root: .goal-board
