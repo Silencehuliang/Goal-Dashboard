@@ -1,0 +1,16 @@
+# Compatibility shim — NOT the source of truth (edit ../cordis.patch.yml).
+#
+# Earlier revisions of this package shipped their bundle layer at
+# ./dist/cordis.patch.yml. Keeping an identical copy here means a host that
+# cached the old patch path still finds a valid layer.
+#
+# 本插件只提供 host 半边：目标看板工具（board_*）与一个只读看板页面路由。
+# 它刻意**不声明 dsh.client** —— 宿主 web boot 会断言每个 client 条目都激活成功，
+# 一条失败整个 Web UI 都起不来，而桌面版 0.2.0-rc.2 的包集合里**没有**
+# @deepseek-ai/dsh-client-runtime（旧版 inject 里声明了它，因而必然失败）。
+# 回归守卫见 test/safety.test.mjs。
+- insert:
+    - id: goal-dashboard
+      name: goal-dashboard
+      config:
+        root: .goal-board

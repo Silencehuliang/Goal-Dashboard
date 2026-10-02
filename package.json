@@ -13,6 +13,7 @@
   "files": [
     "index.js",
     "lib",
+    "dist",
     "cordis.patch.yml",
     "README.md",
     "ATTRIBUTION.md",
