@@ -2018,7 +2018,7 @@ test("g-352 att-005 B1（结构级/两侧一致）：DEBUG 是 .dg-head 的直�
     const h = createRenderHarness({ boardWidth: width, payload: payload() });
     const els = (await h.settle(props)).passElements();
     const parents = parentIndexOf(els);
-    const strong = els.filter((e) => e.type === "strong" && treeText(e) === "dsh-graph").pop();
+    const strong = els.filter((e) => e.type === "strong" && treeText(e) === "Goal-Dashboard").pop();
     assert.ok(strong, `${label}：看板标题存在`);
     const head = parents.get(strong);
     assert.ok(head, `${label}：标题在头部容器内`);
@@ -2056,7 +2056,12 @@ const repoRoot = () => join(import.meta.dirname, "../..");
 
 function sourceFingerprint(): string {
   const hash = createHash("sha256");
-  for (const name of SIG_SOURCE_FILES) hash.update(name + "\n" + readClient(name) + "\n");
+  // 行尾归一化（CRLF → LF）：源指纹必须与 git checkout 的 autocrlf 设置无关，否则
+  // fixture 的 source-sha256 头会变成平台相关的值 —— Windows 工作树（CRLF）与
+  // Linux/WSL2 工作树（LF）会对同一份源码算出两个不同指纹，两个平台的门禁互斥。
+  // 归一化后两侧一致：Linux 上的取值与历史行为逐字节相同（LF 输入本就不含 \r\n）。
+  const normalizeEol = (source: string): string => source.replace(/\r\n/g, "\n");
+  for (const name of SIG_SOURCE_FILES) hash.update(name + "\n" + normalizeEol(readClient(name)) + "\n");
   return hash.digest("hex");
 }
 
@@ -2064,13 +2069,17 @@ function parseSignatureFixture(raw: string): { meta: Map<string, string>; body: 
   const meta = new Map<string, string>();
   const body: string[] = [];
   for (const line of raw.split("\n")) {
-    if (line === "") continue;
-    if (line.startsWith(SIG_HEADER_PREFIX)) {
-      const i = line.indexOf(":", SIG_HEADER_PREFIX.length);
-      if (i > 0) meta.set(line.slice(SIG_HEADER_PREFIX.length, i).trim(), line.slice(i + 1).trim());
+    // 行尾归一化：fixture 以 LF 入库，Windows（autocrlf=true）检出后每行末尾带 \r。
+    // 不去掉它的话 bodyHash 与 fixture 头永远对不上 —— 该守卫在 Windows 上 100% 恒红、
+    // 从而彻底失去判别力（改了正文也照样红、看不出是不是真被改过）。
+    const text = line.endsWith("\r") ? line.slice(0, -1) : line;
+    if (text === "") continue;
+    if (text.startsWith(SIG_HEADER_PREFIX)) {
+      const i = text.indexOf(":", SIG_HEADER_PREFIX.length);
+      if (i > 0) meta.set(text.slice(SIG_HEADER_PREFIX.length, i).trim(), text.slice(i + 1).trim());
       continue;
     }
-    body.push(line);
+    body.push(text);
   }
   return { meta, body };
 }
@@ -2136,7 +2145,7 @@ test("g-352 att-004 N1（渲染级）：标签筛选激活时头部「清除筛�
   const h = createRenderHarness({ boardWidth: 900, payload });
   /** 头部（.dg-head）子树内、文字匹配的按钮——弹窗里也有一个「清除筛选」，必须排除。 */
   const headBtn = (els: any[], text: string) => {
-    const strong = els.filter((e) => e.type === "strong" && treeText(e) === "dsh-graph").pop();
+    const strong = els.filter((e) => e.type === "strong" && treeText(e) === "Goal-Dashboard").pop();
     assert.ok(strong, "看板标题存在");
     const head = parentIndexOf(els).get(strong);
     assert.ok(head, "标题在头部容器内");

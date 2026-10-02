@@ -345,7 +345,7 @@ test("g-174 标题栏源契约：version 链接、新建版本入口迁移、设
   // 切片终点与下面三条断言逐字未变，标题栏契约的覆盖范围与强度不受影响。
   const head = source.slice(source.indexOf('h("div", { style: S.head'), source.indexOf("// g-108：顶部 supervisor 状态栏"));
   // 标题栏显示插件版本链接，新标签打开插件官网。
-  assert.match(head, /href: "https:\/\/github\.com\/miuzel\/dsh-graph",\s*\n\s*target: "_blank"/);
+  assert.match(head, /href: "https:\/\/github\.com\/Silencehuliang\/Goal-Dashboard",\s*\n\s*target: "_blank"/);
   assert.match(head, /"version: " \+ PLUGIN_VERSION/);
   // 标题栏不再重复显示「＋ 新建版本」（已迁至看板左上角，见 g-164 契约断言）。
   assert.doesNotMatch(head, /"＋ 新建版本"/);

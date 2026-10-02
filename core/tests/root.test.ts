@@ -145,10 +145,10 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
     tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
   };
   applyHost(ctx, { root: join(mkdtempSync(join(tmpdir(), "dsh-graph-dual-")), "g") });
-  // host 半边：28 个 graph_* 工具（g-117 新增 graph_handoff / graph_claim_supervisor；
-  // g-119 新增 graph_bind_collect_card；g-118 新增 graph_help；g-141 新增 graph_rename_goal；g-110 新增 archive/unarchive；g-140 新增 delete；g-150 新增 graph_record_attempt_handoff；g-150 范围扩展新增 graph_set_directive / graph_add_comment；g-128 新增 graph_delete_card；g-158 新增 graph_set_goal_type；g-138 新增 graph_postpone_goal；g-183 新增 graph_store_attachment / graph_delete_attachment）
+  // host 半边：54 个 graph_* 工具（历史清单：g-117 新增 graph_handoff / graph_claim_supervisor；
+  // g-119 新增 graph_bind_collect_card；g-118 新增 graph_help；g-141 新增 graph_rename_goal；g-110 新增 archive/unarchive；g-140 新增 delete；g-150 新增 graph_record_attempt_handoff；g-150 范围扩展新增 graph_set_directive / graph_add_comment；g-128 新增 graph_delete_card；g-158 新增 graph_set_goal_type；g-138 新增 graph_postpone_goal；g-183 新增 graph_store_attachment / graph_delete_attachment；skills 工作流层新增 graph_workflow_list / graph_workflow_start / graph_workflow_advance / graph_workflow_status / graph_skills_catalog）
   const toolNames = registered.map((d) => d.name).filter((n) => n.startsWith("graph_"));
-  assert.equal(toolNames.length, 49, "单包注册 49 个 graph_* 工具（g-374 新增 graph_write_results/graph_refresh_results）");
+  assert.equal(toolNames.length, 54, "单包注册 54 个 graph_* 工具（skills 工作流层新增 5 个工作流 / 技能工具）");
   // client 半边：/api/dsh-graph* 全部端点（原 client 包 + g-110 archive/unarchive + g-140 delete + g-158 set-goal-type/create-goal type 透传）
   for (const p of ["/api/dsh-graph", "/api/dsh-graph/goal", "/api/dsh-graph/accept",
     "/api/dsh-graph/resolve-accept", "/api/dsh-graph/edit-description",

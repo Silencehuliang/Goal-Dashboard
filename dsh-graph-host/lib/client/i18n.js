@@ -1059,6 +1059,25 @@
       'profileSettings.promptHint': '默认为空；workspace 覆盖字段 default 继承此项，自定义文本覆盖，显式空值禁用该项全局提示词。',
       'profileSettings.saving': '保存中…',
       'profileSettings.save': '保存',
+
+      // === 技能工作流条（mattpocock/skills，只读 v1）===
+      // 阶段/工作流标题、skill 名等来自数据（用户内容），不翻译；此处只覆盖框架文案。
+      'workflow.label': '🧭 工作流',
+      'workflow.count': '×{count}',
+      'workflow.tooltip': '进行中的技能工作流：{goals}',
+      'workflow.tooltipUnnamed': '进行中的技能工作流',
+      'workflow.unnamedStage': '（未命名阶段）',
+      'workflow.stage': '阶段：{stage}',
+      'workflow.position': '第 {index}/{count} 步',
+      'workflow.aria': '技能工作流：{stage}，第 {index}/{count} 步',
+      'workflow.stageTooltip': '{title}（{state}）',
+      'workflow.status.active': '进行中',
+      'workflow.status.completed': '已完成',
+      'workflow.status.blocked': '阻塞',
+      'workflow.stageState.done': '已完成',
+      'workflow.stageState.active': '进行中',
+      'workflow.stageState.pending': '待执行',
+      'workflow.stageState.skipped': '已跳过',
     };
 
     // --- 英文字典 ---
@@ -2119,6 +2138,24 @@
       'profileSettings.promptHint': 'Default empty; workspace field default inherits this, custom text overrides, explicit empty disables global prompt.',
       'profileSettings.saving': 'Saving…',
       'profileSettings.save': 'Save',
+
+      // === Skills workflow strip (mattpocock/skills, read-only v1) ===
+      'workflow.label': '🧭 Workflow',
+      'workflow.count': '×{count}',
+      'workflow.tooltip': 'Active skills workflows: {goals}',
+      'workflow.tooltipUnnamed': 'Active skills workflows',
+      'workflow.unnamedStage': '(unnamed stage)',
+      'workflow.stage': 'Stage: {stage}',
+      'workflow.position': 'Step {index}/{count}',
+      'workflow.aria': 'Skills workflow: {stage}, step {index}/{count}',
+      'workflow.stageTooltip': '{title} ({state})',
+      'workflow.status.active': 'Active',
+      'workflow.status.completed': 'Completed',
+      'workflow.status.blocked': 'Blocked',
+      'workflow.stageState.done': 'Done',
+      'workflow.stageState.active': 'In progress',
+      'workflow.stageState.pending': 'Pending',
+      'workflow.stageState.skipped': 'Skipped',
     };
 
     // --- locale 集成辅助函数 ---

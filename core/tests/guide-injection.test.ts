@@ -132,14 +132,14 @@ test("g-118：systemPrompt 服务缺失时静默跳过（headless / 测试组合
   apply(ctx, { root }); // 不抛错即可（无 systemPrompt → 静默跳过）
 });
 
-test("g-118/g-119：注入不影响 graph_* 工具注册（16 + bind + help + rename + archive/unarchive + delete + record_attempt_handoff + set_directive + add_comment + delete_card + set_goal_type + postpone_goal = 28）", () => {
+test("g-118/g-119：注入不影响 graph_* 工具注册（历史清单 16 + bind + help + rename + archive/unarchive + delete + record_attempt_handoff + set_directive + add_comment + delete_card + set_goal_type + postpone_goal；现全量 54 个）", () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g118-"));
   const root = resolveRoot({}, ws);
   init(root);
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: session-super-1\n");
   const { ctx, registered, sections } = makeMockCtx();
   apply(ctx, { root });
-  assert.equal(registered.length, 49, "全量 49 个 graph_* 工具（g-374 新增 graph_write_results/graph_refresh_results）");
+  assert.equal(registered.length, 54, "全量 54 个 graph_* 工具（skills 工作流层新增 5 个工作流 / 技能工具）");
   assert.equal(sections.filter((s) => s.name === "dsh-graph-guide-hint").length, 1, "section 只注册一次");
 });
 

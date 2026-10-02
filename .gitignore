@@ -6,8 +6,14 @@ probe/
 
 core-dist/
 
-# g-319：构建产物隔离到独立 dist/ 目录（由 scripts/build.sh 自动生成）
-dist/
+# ============================================================================
+# Goal-Dashboard 有意**提交** dist/（与上游 dsh-graph 相反）。
+# 原因：pnpm 拒绝在未列入 allowBuilds 时执行 git 依赖的 prepare 构建脚本
+# (ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED)，会让 `dsh plugin add github:...` 失败。
+# 仓库根 package.json 即插件清单（main → dist/index.js），预构建产物入库后
+# 安装无需任何构建步骤。改源码后请运行 `pnpm build` 并把 dist/ 一起提交。
+# 来源可核对：pnpm test 的 g312 dist-freshness 守卫会校验 dist 与源码一致。
+# ============================================================================
 
 # g-348：build.sh 的原子发布暂存根（`.dist-stage.XXXXXX/`，与 dist 同文件系统，
 # 全部步骤成功后 `mv -T --exchange` 与 dist 原子互换；EXIT trap 负责清理）。

@@ -1,11 +1,19 @@
 # Changelog
 
-dsh-graph 面向用户的变更史，版本倒序（最新在前）。每个版本不超过 5 条要点，用用户语言描述「能做什么」而非实现细节。
+Goal-Dashboard 面向用户的变更史（fork 自 [miuzel/dsh-graph](https://github.com/miuzel/dsh-graph)），版本倒序（最新在前）。每个版本不超过 5 条要点，用用户语言描述「能做什么」而非实现细节。
 
 - 逐版本的门禁结论与审计数字：见 [`docs/release-checklist-v*.md`](docs/release-checklist-v0.17.0.md)；
 - 平台门禁运行手册：见 [`docs/platform-gate.md`](docs/platform-gate.md)。
 
 本表承接自 README 迁移的用户可见变更（v0.17.0 / v0.16.1 / v0.16.0），以及原 README「当前功能状态」小节所记的特性 —— 后者按**真实落地版本**分节（v0.11.0 / v0.9.2 / v0.7.1 / v0.6.1），而非 README 记下它们的版本。其他版本中，v0.10.0 与 v0.15.0 有独立发布清单 `docs/release-checklist-v*.md`；v0.11.x / v0.12.0 等中间版本没有独立清单，其变更见对应的 git tag 与提交。
+
+## v0.18.0 — 2026-10-02
+
+- **项目更名为 Goal-Dashboard**：本仓库是 [miuzel/dsh-graph](https://github.com/miuzel/dsh-graph) 的 fork，npm 包名由 `dsh-graph` 改为 `goal-dashboard`；工具名 `graph_*`、REST 路径 `/api/dsh-graph*`、数据目录 `.dsh-graph` 与内部插件 id `dsh-graph-host` 刻意保持不变，既有数据与配置不受影响。
+- **安装不再执行构建脚本**：`dist/` 预构建产物入库、仓库根 package 本身就是插件清单，安装时零构建，消除了 pnpm 拒绝执行 git 依赖构建脚本所导致的 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 失败。
+- **新增 mattpocock/skills 工作流层**：内置 37 个 skill 的目录与 5 个预设工作流；工作流可挂在目标上并记录阶段进度，新增 `graph_workflow_list` / `graph_workflow_start` / `graph_workflow_advance` / `graph_workflow_status` 与 `graph_skills_catalog`（工具数 49 → 54），并提供两个只读 REST 端点。
+- **修正宿主兼容范围**：`engines.dsh` 改为 `>=0.1.5-rc.2 <0.2.1-0 || >=0.2.0-rc.1 <0.2.1-0` —— 单子句写法按 node-semver 的预发布规则会静默排除 0.2.0 预发布线，补上显式 `>=0.2.0-rc.1` 子句后 `0.2.0-rc.1` / `0.2.0-rc.2` 才真正被接受。
+- **看板头部更名**：看板头部标题与插件官网链接改用 Goal-Dashboard 品牌。
 
 ## v0.17.0 — 2026-09-30
 

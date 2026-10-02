@@ -264,7 +264,7 @@
         }, dgT("sidebar.tab.title")));
     }
     return {
-      name: "dsh-graph",
+      name: "goal-dashboard",
       // connection/remote/modelDirectories 是可选 capability：不得把它们列为硬 inject，
       // 否则旧/部分 profile 未激活其中任一服务时，整个看板 client apply 会被 runner 阻断。
       inject: ["slots", "sessions"],
@@ -299,6 +299,23 @@
             (props) => h(SupervisorHeaderBadge, props),
           ),
         );
+        // skills 工作流条（只读 v1）：会话头 list slot 的第二个注册项（主管徽章之后，order -8）。
+        // 该挂载点没有 goal 上下文 ⇒ 组件只调 workspace 级 /api/dsh-graph/workflows，绝不下发 goal。
+        // 端点缺失（404，core 侧尚未接线）/载荷畸形/无 workspace 时组件返回 null：
+        // 只是「会话头没有这条 chip」，绝不拖垮会话头与看板（见 workflow-panel.js 的纪律注释）。
+        // 不动 g330:215/:228 与 g352 渲染契约所冻结的 conversation.view 注册块——任何包装层
+        // 都会让 g352 渲染 harness 只渲染包装组件、整棵看板子树不再被渲染。
+        try {
+          ctx.slots.inject("conversation.session.header.actions", () =>
+            ctx.slots.register(
+              { name: "conversation.session.header.actions", id: "dsh-graph-workflow-strip", order: -8 },
+              (props) => h(WorkflowStrip, props),
+            ),
+          );
+        } catch (e) {
+          // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
+          console.warn("[dsh-graph-host] workflow strip 注册失败（会话头无工作流条）", e);
+        }
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
             {

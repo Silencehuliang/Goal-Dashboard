@@ -401,7 +401,7 @@ test("g-321 bundle 冒烟：0.1.6 API 面（只有 uiWorkspace.openSession，ses
   assert.equal(typeof (sessions as any).open, "undefined");
   assert.equal(typeof (sessions as any).openSubagent, "undefined");
   const { mod, registered } = loadAndApplyClient({ uiWorkspace, sessions });
-  assert.equal(mod.name, "dsh-graph");
+  assert.equal(mod.name, "goal-dashboard");
   assert.ok(registered.length >= 1, "至少注册了看板 conversation.view 槽");
 });
 
@@ -412,13 +412,13 @@ test("g-321 bundle 冒烟：0.1.5 API 面（无 uiWorkspace，sessions 有 open/
     setSubagentCatalogOpen: () => {}, refreshSubagents: async () => {},
   };
   const { mod, registered } = loadAndApplyClient({ uiWorkspace: undefined, sessions });
-  assert.equal(mod.name, "dsh-graph");
+  assert.equal(mod.name, "goal-dashboard");
   assert.ok(registered.length >= 1);
 });
 
 test("g-321 bundle 冒烟：sessions 服务整体缺失（最小 profile）时 apply 仍不抛", () => {
   const { mod } = loadAndApplyClient({ uiWorkspace: undefined, sessions: undefined });
-  assert.equal(mod.name, "dsh-graph");
+  assert.equal(mod.name, "goal-dashboard");
 });
 
 // ---------------------------------------------------------------- 4. 生成产物与 i18n

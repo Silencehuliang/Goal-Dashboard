@@ -40,6 +40,12 @@ PARTS=(
   # 与 search-state、board-retain 同理必须排在 drag-prompts 之前（工厂作用域），
   # 否则会变成 KanbanView 内部的嵌套函数。
   "narrow-width"
+  # skills 工作流条（mattpocock/skills，只读 v1：WorkflowStrip 组件 + 载荷归一化纯函数）。
+  # 与 search-state / board-retain / narrow-width 同理必须排在 drag-prompts 之前
+  #（工厂作用域）：夹在 drag-prompts 与 kanban 之间会变成 KanbanView 内部嵌套函数，
+  # 每次渲染产生新的组件身份 → React 卸载重建整条工作流条；且 plugin.js 的
+  # conversation.session.header.actions 注册回调引用的会是 KanbanView 局部符号（未定义）。
+  "workflow-panel"
   # g-367：搜索命中按版本/分区聚合纯函数模块（组序/分桶；窄档聚合泳道的组头与计数）。
   # 与 search-state、board-retain、narrow-width 同理必须排在 drag-prompts 之前（工厂作用域），
   # 否则会变成 KanbanView 内部的嵌套函数。

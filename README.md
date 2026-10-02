@@ -1,49 +1,56 @@
-# dsh-graph
+# Goal-Dashboard
 
-把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件 —— 基于图的目标管理（Graph-based Goal Management）。
+把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件，并提供 [mattpocock/skills](https://github.com/mattpocock/skills) 工作流与看板泳道的集成。
 
-<p align="center">
-  <img src="docs/banner.webp" alt="dsh-graph —— Agent 工作的目标化管理" width="100%">
-</p>
+**Goal-Dashboard 是 [miuzel/dsh-graph](https://github.com/miuzel/dsh-graph) 的 fork**（MIT，见 [ATTRIBUTION.md](ATTRIBUTION.md)），针对 **DSH 桌面版**做了安装路径改造，并在其上叠加 skills 工作流层。
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-graph"><img src="https://img.shields.io/npm/v/dsh-graph?style=flat-square&label=npm&color=cb3837" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/dsh-graph"><img src="https://img.shields.io/npm/dm/dsh-graph?style=flat-square&label=downloads&color=cb3837" alt="npm downloads"></a>
-  <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/node/v/dsh-graph?style=flat-square" alt="node engine"></a>
-  <a href="https://awesome-dsh-plugin.com"><img src="https://img.shields.io/badge/awesome--dsh--plugin-listed-2f6feb?style=flat-square" alt="awesome-dsh-plugin listed"></a>
-  <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license MIT"></a>
-  <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.1--0-2f6feb?style=flat-square" alt="DSH host range"></a>
+  <a href="https://github.com/Silencehuliang/Goal-Dashboard"><img src="https://img.shields.io/badge/GitHub-Goal--Dashboard-2f6feb?style=flat-square" alt="GitHub"></a>
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license MIT">
+  <img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.1--0-2f6feb?style=flat-square" alt="DSH host range">
+  <img src="https://img.shields.io/badge/实测宿主-0.2.0--rc.2-2f6feb?style=flat-square" alt="tested host 0.2.0-rc.2">
 </p>
 
-**当前版本 v0.17.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 49 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
+**当前版本 v0.18.0** —— 包名 `goal-dashboard`。一个包同时提供面向 Agent 的 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
 
-**最新亮点（v0.17.0）**
+## 与上游 dsh-graph 的差异
 
-- **支持 DSH 0.2.0 系宿主**：宿主兼容范围放宽为 `>=0.1.5-rc.2 <0.2.1-0`，并在隔离实例上实测 `0.2.0-rc.1` / `0.2.0-rc.2`。
-- **目标完成摘要**：目标弹窗新增只读「完成摘要」页签，子代理每次执行的输出自动落盘（零额外 token），也支持一键更新为 LLM 详情级摘要。
-- **窄档搜索按版本/分区分组**：窄档（<480px）搜索命中在聚合泳道内按版本/分区加组头与计数，仍保持单列纵向、零横向溢出。
-- **隔离实例与看板数据互不污染**：修正「仓库内子目录被误判为 linked worktree」，隔离实例、门禁与测试不再写真实看板数据；并修复 pnpm 12 下无法从零新建隔离实例。
-- **文档面机器守卫**：工具表六面一致性、工具计数、记忆上限取值与 CHANGELOG 版本节结构由测试钉住（改坏即红）。
+| | 上游 dsh-graph v0.17.0 | Goal-Dashboard v0.18.0 |
+|---|---|---|
+| npm 包名 | `dsh-graph` | `goal-dashboard` |
+| 仓库根 package.json | 私有开发包（`private: true`） | **插件清单本身**（`main` → `dist/index.js`） |
+| 构建产物 | `dist/` 仅本地生成（gitignored） | **`dist/` 入库提交** |
+| 安装时的构建脚本 | 有 `prepare`（需 pnpm `allowBuilds` 放行） | **无 `prepare`，安装零构建** |
+| skills 工作流 | 无 | **内置 mattpocock/skills 目录、工作流预设与目标级工作流状态** |
 
-变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [docs/release-checklist-v0.17.0.md](docs/release-checklist-v0.17.0.md)，平台门禁运行手册见 [docs/platform-gate.md](docs/platform-gate.md)。
+保留不变（刻意为之，避免破坏既有数据与用户配置）：工具名 `graph_*`、REST 路径 `/api/dsh-graph*`、数据目录 `.dsh-graph`、内部插件 id `dsh-graph-host`、settings namespace `dsh-graph`。
 
-## 平台状态
+## 安装（DSH 桌面版）
 
-| 平台 | 本版状态 |
-|------|----------|
-| Linux / WSL2 | ✅ 已实测通过 |
-| 原生 Windows | ✅ **已实测通过**（原生 `win32/x64`，宿主 `@deepseek-ai/dsh@0.2.0-rc.2`；本版包 T1–T5 通过 10 / 失败 0 / 告警 0，见 [v0.17.0 清单](docs/release-checklist-v0.17.0.md) §3.1） |
-| macOS | ⚠️ **未验证**（最近真机结论见 [v0.16.0 清单](docs/release-checklist-v0.16.0.md)） |
+**为什么上游装不上**：上游以 `prepare` 脚本在安装时构建，而 pnpm 默认拒绝执行 git 依赖的构建脚本 —— 桌面版插件管理器里安装 `miuzel/dsh-graph` 会失败并报：
 
-三平台共用同一安装包。已知限制：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
-
-## 安装
-
-```sh
-dsh plugin --profile <name> add dsh-graph
+```
+ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED
 ```
 
-需要 Node ≥ 22。依赖说明、宿主兼容范围（`engines.dsh` 声明与实测宿主）、侧边栏用法、数据目录等完整内容，见 **[dsh-graph-host/README.md](dsh-graph-host/README.md)**（即 npm 包内 README）。
+Goal-Dashboard 把 `dist/` 预构建产物直接入库，**安装时不需要执行任何构建脚本**，因此不再撞上该限制。
+
+```sh
+dsh plugin --profile desktop add github:Silencehuliang/Goal-Dashboard
+```
+
+也可以直接在桌面版 GUI 的插件管理器里填入仓库地址。安装后**需要重启 DSH 桌面版**：host 半边（工具 + REST 端点）在进程启动时装配；client 半边（看板）随页面刷新生效。
+
+> ⚠️ **不要用含空格的本地路径安装**。已实测：`dsh plugin add` 会把 specifier 按空格切开 —— 例如
+> `link:E:/…/Goal Dashboard/dist` 会被拆成 `Goal` 与 `Dashboard/…` 两个包，甚至真的去公共 registry
+> 拉了一个同名的 `Dashboard@1.0.0`（连带 629 个传递依赖）；同样的 specifier 交给 `pnpm add` 则完全正常，
+> 所以问题出在 `dsh` 的转发而不是 pnpm。**优先使用上面的 `github:` 写法**（git 克隆目录名不含空格，不受影响）。
+
+宿主兼容范围由 `engines.dsh` 声明为 `>=0.1.5-rc.2 <0.2.1-0 || >=0.2.0-rc.1 <0.2.1-0`。
+后面的 `||` 子句不是冗余：在 node-semver 的默认预发布规则下，`0.2.0-rc.1`/`0.2.0-rc.2` **不满足**前一个区间
+（该区间没有任何 `0.2.0` 元组的预发布比较器），必须显式补上 `>=0.2.0-rc.1` 才真正覆盖 0.2.0 预发布线。
+
+需要 Node ≥ 22。数据目录、侧边栏用法、工具逐个说明等完整内容见 **[dsh-graph-host/README.md](dsh-graph-host/README.md)**。
 
 ## 核心概念
 
@@ -54,9 +61,22 @@ dsh plugin --profile <name> add dsh-graph
 - **排期**：Backlog（暂存池）↔ Version（批量质量管理）↔ 独立目标（standalone）；看板泳道顺序是展示态，可拖拽调整。
 - **换会话交接**：`graph_handoff` 生成交接文档（board 投影 + 长期记忆 + 环境事实），`graph_claim_supervisor` 由新会话幂等接管。
 
+## skills 工作流集成
+
+把 [mattpocock/skills](https://github.com/mattpocock/skills) 里「一次工程改动要走完的流程」建模为**工作流（workflow）**，挂在目标上，其阶段直接映射到看板泳道：
+
+```text
+grill-with-docs → to-spec → to-tickets → implement → code-review → pr
+   planning        planning   planning     in_progress    review     review
+```
+
+内置 37 个 skills 的目录与 5 个预设工作流（`engineering-feature` / `bugfix` / `spec-first` / `spike` / `architecture-deepening`）。工作流状态落在目标目录下并由既有 append-only 事件流记录。
+
+设计、数据形状、工具与 REST 契约见 **[docs/skills-integration.md](docs/skills-integration.md)**。
+
 ## 提供的工具
 
-49 个 `graph_*` 工具，按功能分组（逐个说明见 [dsh-graph-host/README.md](dsh-graph-host/README.md) 或 `graph_help`）：
+54 个 `graph_*` 工具，按功能分组（逐个说明见 [dsh-graph-host/README.md](dsh-graph-host/README.md) 或 `graph_help`）：
 
 | 分组 | 工具 |
 |------|------|
@@ -74,38 +94,35 @@ dsh plugin --profile <name> add dsh-graph
 | 历史讨论 | `graph_add_comment` |
 | 完成摘要 | `graph_write_results` · `graph_refresh_results` |
 | 换会话 | `graph_handoff` · `graph_claim_supervisor` |
+| 工作流 / 技能 | `graph_workflow_list` · `graph_workflow_start` · `graph_workflow_advance` · `graph_workflow_status` · `graph_skills_catalog` |
 | 帮助 | `graph_help` |
 
 ## 看板（浏览器客户端）
 
-浏览器二维泳道看板：横向为生命周期阶段列（描述 / 收集 / 执行 / 确认 / 交付 / 阻塞），每个版本一条泳道，另有 Backlog 与独立目标区；支持拖拽排期、判据 / 上下文卡片抽屉、实时状态显示、阻塞折叠等。以下为虚构演示数据（nebula-notes）截图：
+浏览器二维泳道看板：横向为生命周期阶段列（描述 / 收集 / 执行 / 确认 / 交付 / 阻塞），每个版本一条泳道，另有 Backlog 与独立目标区；支持拖拽排期、判据 / 上下文卡片抽屉、实时状态显示、阻塞折叠等。以下为上游虚构演示数据（nebula-notes）截图：
 
 ![看板总览](screenshot/screenshot-1.png)
 ![目标详情弹窗](screenshot/screenshot-2.png)
 ![侧边栏看板（窄档：阶段列纵向堆叠、工具条折叠为 `⋯ 工具`）](screenshot/sidebar-kanban.png)
 
-## 侧边栏与数据目录
-
-侧边栏入口、窄档（<480px）分档行为与「怎么把看板放进窄档」的实测说明，以及数据目录 `<workspace>/.dsh-graph`（纯文本 + 只追加 `events.jsonl`，git 友好、可 `graph_rebuild` 对账）的完整说明，均见 [dsh-graph-host/README.md](dsh-graph-host/README.md)。
-
-## 仓库结构（monorepo）
+## 仓库结构
 
 - `core/` —— 核心层源码（唯一事实源），经 `scripts/sync-core.sh` 编译成 `dist/core/*.js` 进发布包；核心层不依赖 DSH。
-- `dsh-graph-host/` —— 单包发布物源码：`index.js`（工具 + REST 端点）、`lib/client/*.js`（看板源模块，构建产物为 `dist/lib/client.js`）、`cordis.patch.yml`、`supervisor-guide.{zh,en}.md`、`README.md`、`LICENSE`。
-- `schema/`、`docs/`、`scripts/` —— 数据 / 设计文档 / 构建脚本；一切构建产物落在 `dist/`（gitignored）。
+- `dsh-graph-host/` —— 插件源码：`index.js`（工具 + REST 端点）、`lib/client/*.js`（看板源模块，拼接产物为 `dist/lib/client.js`）、`cordis.patch.yml`、`supervisor-guide.{zh,en}.md`、`README.md`、`LICENSE`。
+- `dist/` —— **发布产物，且入库提交**（这是安装零构建的关键）。
+- `schema/`、`docs/`、`scripts/` —— 数据 / 设计文档 / 构建脚本。
 
 ## 开发
 
 ```sh
-bash scripts/build.sh                 # 同步 core + 客户端产物 + 复制发布资产到 dist/
+pnpm install                          # 需要 bash 在 PATH 上
+pnpm build                            # = bash scripts/build.sh，重建 dist/
 node --test core/tests/*.test.ts      # 全量测试
 ./node_modules/.bin/tsc --noEmit -p tsconfig.json
-# 隔离测试实例（不碰主 GUI）：DSH_HOME 与 workspace 均在 ./tmp/dsh-test/ 下
-bash scripts/dsh-test-web.sh <DSH版本> [--port PORT]
 ```
 
-构建与实验一律在隔离 worktree（`.worktrees/<goal>-att-<NN>`）内进行；约定见 [AGENTS.md](AGENTS.md)，隔离实例参数与开发回路见 [docs/dev-instance-guide.md](docs/dev-instance-guide.md)。README 截图用 `scripts/dsh-graph-mock-seed.mjs` 生成虚构演示数据后复现。
+**改完源码必须 `pnpm build` 并把 `dist/` 一起提交** —— 否则安装到用户机器上的还是旧产物。`core/tests/g312-dist-freshness-g312.test.ts` 会把「改了源码没重建」判红。
 
 ## License
 
-MIT（Copyright © 2026 miuzel）—— 见 [dsh-graph-host/LICENSE](dsh-graph-host/LICENSE)。
+MIT。本仓库是 [miuzel/dsh-graph](https://github.com/miuzel/dsh-graph)（Copyright © 2026 miuzel）的 fork，并集成 [mattpocock/skills](https://github.com/mattpocock/skills)（Copyright © 2026 Matt Pocock）的工作流设计 —— 两者的许可与归属见 [ATTRIBUTION.md](ATTRIBUTION.md)，原始许可证见 [dsh-graph-host/LICENSE](dsh-graph-host/LICENSE)。
