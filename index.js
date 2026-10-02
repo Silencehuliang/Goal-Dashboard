@@ -316,6 +316,7 @@ export function apply(ctx, config) {
         });
         if (typeof off === "function") disposers.push(off);
         routeState.registered = true;
+        process.stderr.write("[goal-dashboard] board page registered at /goal-dashboard\n");
         return true;
       } catch {
         return false;
@@ -340,7 +341,7 @@ export function apply(ctx, config) {
 
     process.stderr.write(
       `[goal-dashboard] apply: ${tools.length} tools registered` +
-        (routeState.registered ? " + /goal-dashboard board route" : " (webServer not ready; board route pending/absent)") +
+        (routeState.registered ? " + board page" : "; board page pending (webServer not up yet)") +
         "\n",
     );
 

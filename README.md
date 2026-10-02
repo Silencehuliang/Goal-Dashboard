@@ -168,6 +168,25 @@ cordis.patch.yml         组合包层
 
 ---
 
+## 验证记录
+
+在**一次性 0.2.0-rc.2 实例**上实测（独立 `DSH_HOME`、端口 3085、`dsh plugin add link:<无空格副本>`，
+**未触碰桌面版 profile**）：
+
+| 检查 | 结果 |
+|---|---|
+| `--dump-config` 组合出插件层 | `# == goal-dashboard` |
+| 宿主真正导入并 `apply` | stderr：`[goal-dashboard] apply: 14 tools registered` |
+| 是否存在激活失败的条目 | 无 `did not activate` / `failed to import` |
+| 看板页面 | `GET /goal-dashboard` → **200**，2955 字节，含看板标记 |
+| 单元测试 | **49/49 通过**（含 8 条 GUI 安全守卫） |
+
+**尚未验证**：桌面版重启后的实际表现。但本插件不参与 Web UI 组合（无 `dsh.client`），
+所以**结构上不可能**再出现"重启打不开"；宿主对 host 条目激活失败只**告警不终止**启动，
+因此最坏情况也只是工具没加载。
+
+---
+
 ## 已知限制
 
 - **没有 GUI 内页签**。看板走独立 HTTP 页面，这是为安全付出的代价（见开头一节）。
